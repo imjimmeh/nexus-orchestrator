@@ -1,0 +1,119 @@
+workflow_id: project_generate_agents_md
+name: Project AGENTS.md Authoring and Programmatic Merge
+description: |
+  Researches a project's codebase, authors a comprehensive root AGENTS.md, then commits and merges the result into main using deterministic workflow command steps (not agent-driven git actions).
+trigger:
+  type: manual
+  name: project_generate_agents_md
+  launch:
+    context: scope
+    allow_raw_json: true
+    inputs:
+      - key: objective
+        label: Objective
+        description: Optional focus area to emphasize in AGENTS.md.
+        type: string
+        required: false
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: queue
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+jobs:
+  - id: research_author_and_merge_agents
+    type: execution
+    tier: heavy
+    max_step_loops: 1
+    inputs:
+      agent_profile: senior_dev
+      objective: "{{ trigger.objective }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+    steps:
+      - id: research_and_author_agents_file
+        type: agent
+        prompt_file: prompts/project-generate-agents-md/author-agents-md.md
+      - id: verify_agents_file_exists
+        type: run_command
+        command: |
+          set -euo pipefail
+          cd /workspace
+          test -f AGENTS.md
+          echo "AGENTS.md exists and is ready for git operations."
+        working_dir: /workspace
+      - id: commit_and_merge_agents_file
+        type: run_command
+        command: |
+          set -euo pipefail
+          cd /workspace
+
+          if [ ! -d .git ]; then
+            echo "Expected /workspace to be a git repository."
+            exit 1
+          fi
+
+          if [ ! -f AGENTS.md ]; then
+            echo "AGENTS.md is missing."
+            exit 1
+          fi
+
+          UNEXPECTED_PATHS="$(git status --porcelain | awk '{print $2}' | grep -v '^AGENTS.md$' || true)"
+          if [ -n "${UNEXPECTED_PATHS}" ]; then
+            echo "Unexpected modified files detected. This workflow only commits AGENTS.md:"
+            echo "${UNEXPECTED_PATHS}"
+            exit 1
+          fi
+
+          if ! git config user.name >/dev/null 2>&1; then
+            git config user.name "Nexus Workflow Bot"
+          fi
+          if ! git config user.email >/dev/null 2>&1; then
+            git config user.email "nexus.workflow.bot@local"
+          fi
+
+          git fetch origin main
+
+          WORK_BRANCH="chore/agents-md-bootstrap-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "${WORK_BRANCH}"
+
+          git add AGENTS.md
+          if git diff --cached --quiet; then
+            echo "No AGENTS.md changes to commit."
+            exit 1
+          fi
+
+          git commit -m "docs: create project AGENTS.md baseline"
+          git push -u origin "${WORK_BRANCH}"
+
+          git checkout main
+          git pull --ff-only origin main
+          git merge --no-ff "${WORK_BRANCH}" -m "merge: AGENTS.md baseline from ${WORK_BRANCH}"
+          git push origin main
+
+          echo "Merged ${WORK_BRANCH} into main and pushed."
+        working_dir: /workspace
+      - id: report_merge_commit
+        type: run_command
+        command: |
+          set -euo pipefail
+          cd /workspace
+          git --no-pager log --oneline -1
+          git status --short
+        working_dir: /workspace

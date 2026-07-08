@@ -1,0 +1,88 @@
+workflow_id: ui_ux_smoke_test
+name: UI/UX Smoke Test
+description: Browser-driven UI/UX validation for a local or remote app.
+trigger:
+  type: manual
+  launch:
+    context: none
+    allow_raw_json: true
+    inputs:
+      - key: scopeId
+        label: Scope ID
+        type: string
+        required: false
+      - key: objective
+        label: Objective
+        type: string
+        required: true
+      - key: target_url
+        label: Target URL
+        type: string
+        required: false
+      - key: app_start_command
+        label: App Start Command
+        type: string
+        required: false
+      - key: flows
+        label: Flows
+        type: json
+        required: false
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: find
+      - effect: allow
+        tool: grep
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: browser_open_page
+      - effect: allow
+        tool: browser_navigate
+      - effect: allow
+        tool: browser_click
+      - effect: allow
+        tool: browser_type
+      - effect: allow
+        tool: browser_wait_for
+      - effect: allow
+        tool: browser_read_page
+      - effect: allow
+        tool: browser_screenshot
+      - effect: allow
+        tool: browser_close_page
+      - effect: allow
+        tool: browser_list_failure_artifacts
+      - effect: allow
+        tool: browser_get_failure_artifact
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+jobs:
+  - id: test_ui
+    type: execution
+    tier: heavy
+    max_step_loops: 3
+    inputs:
+      agent_profile: ui-ux-tester
+    output_contract:
+      required: [pass_fail_status, summary, issues, tested_routes]
+    steps:
+      - id: run_smoke_test
+        type: agent
+        prompt_file: prompts/ui-ux-smoke-test/test.md

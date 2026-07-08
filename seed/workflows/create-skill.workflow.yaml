@@ -1,0 +1,63 @@
+workflow_id: create_skill
+name: Create or Update Skill
+description: >
+  Agent-authored skill materialization. Dispatched when a skill improvement
+  proposal is approved. The skill-author agent reviews the proposed SKILL.md,
+  refines it, recommends a scope, and persists it to the library.
+
+trigger:
+  type: manual
+  inputs:
+    - name: target_skill_name
+      type: string
+      required: true
+    - name: patch_markdown
+      type: string
+      required: true
+    - name: proposal_summary
+      type: string
+      required: true
+    - name: source_proposal_id
+      type: string
+      required: false
+    - name: scope_id
+      type: string
+      required: false
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: create_skill
+      - effect: allow
+        tool: update_skill
+      - effect: allow
+        tool: read_skill_manifest
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+
+jobs:
+  - id: author_skill
+    type: execution
+    tier: heavy
+    inputs:
+      agent_profile: skill-author
+      target_skill_name: "{{ trigger.target_skill_name }}"
+      patch_markdown: "{{ trigger.patch_markdown }}"
+      proposal_summary: "{{ trigger.proposal_summary }}"
+      source_proposal_id: "{{ trigger.source_proposal_id }}"
+      scope_id: "{{ trigger.scope_id }}"
+    output_contract:
+      required:
+        - skill_name
+        - materialized
+      optional:
+        - recommended_scope
+        - scope_rationale
+        - rejection_reason
+    steps:
+      - id: author
+        prompt_file: prompts/create-skill/author.md

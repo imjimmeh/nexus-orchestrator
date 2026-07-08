@@ -1,0 +1,111 @@
+workflow_id: work_item_post_merge_spec_hydration
+name: Post-Merge Work Item Spec Hydration
+description: |
+  Listens for WorkItemMergeCompletedEvent and scans the merged branch for structured spec files in docs/work-items/. If spec files are found, reconciles canonical definitions into the project's work item projection.
+trigger:
+  type: event
+  name: WorkItemMergeCompletedEvent
+permissions:
+  tool_policy:
+    default: deny
+    rules: []
+jobs:
+  - id: hydrate_specs
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - created_count
+        - updated_count
+        - archived_count
+        - errored_count
+        - errors
+        - spec_directory
+      types:
+        created_count: integer
+        updated_count: integer
+        archived_count: integer
+        errored_count: integer
+        errors: array
+        spec_directory: string
+    inputs:
+      agent_profile: orchestrator
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: kanban.publish_specs
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: spawn_subagent_async
+          - effect: deny
+            tool: bash
+    steps:
+      - id: publish_hydrated_specs
+        type: agent
+        prompt: |
+          Reconcile the canonical work-item specs for this merged work item into the Kanban DB.
+
+          Project ID: {{trigger.scopeId}}
+          Context ID: {{trigger.contextId}}
+
+          Call kanban.publish_specs exactly once with:
+          - project_id: {{trigger.scopeId}}
+          - spec_directory: docs/work-items
+          - allow_missing_specs: true
+
+          `kanban.publish_specs` reconciles markdown work-item specs into Kanban DB work items — it is a database-only operation with no git side effects.
+
+          If the result is `ok: false`, include `completed_with_errors: true` in output.
+
+          A missing directory with `reason: missing_spec_directory` is an acceptable no-op.
+
+          Use direct result fields from the response — do not use nested wrapper paths.
+
+          Then call set_job_output exactly once with:
+          - data: {
+              "created_count": <created_count>,
+              "updated_count": <updated_count>,
+              "archived_count": <archived_count>,
+              "errored_count": <errored_count>,
+              "spec_count": <spec_count>,
+              "spec_directory": "<spec_directory>",
+              "unchanged_count": <unchanged_count>,
+              "skipped_count": <skipped_count>,
+              "errors": <errors or []>,
+              "completed_with_errors": <true if ok is false, else false>
+            }
+  - id: emit_spec_generation_finished
+    type: emit_event
+    tier: light
+    depends_on:
+      - hydrate_specs
+    condition: "{{#if (or jobs.hydrate_specs.output.created_count jobs.hydrate_specs.output.updated_count jobs.hydrate_specs.output.archived_count)}}true{{else}}false{{/if}}"
+    inputs:
+      event_name: WorkItemSpecGenerationFinishedEvent
+      payload:
+        event: WorkItemSpecGenerationFinishedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        contextId: "{{ trigger.contextId }}"
+        reason: spec_generation_finished
+  - id: skip_spec_generation_finished
+    type: run_command
+    tier: light
+    depends_on:
+      - hydrate_specs
+    condition: "{{#if (or jobs.hydrate_specs.output.created_count jobs.hydrate_specs.output.updated_count jobs.hydrate_specs.output.archived_count)}}false{{else}}true{{/if}}"
+    inputs:
+      command: echo skip_spec_generation_finished_no_new_items
+      working_dir: /tmp

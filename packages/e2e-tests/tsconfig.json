@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "src/**/*.d.mts",
+    "vitest.config.ts",
+    "../../apps/kanban/src/orchestration/imported-repository-backlog-reconciler.ts",
+    "../../apps/kanban/src/orchestration/imported-repository-backlog-reconciler.types.ts",
+    "../../apps/kanban/src/orchestration/probe-result-artifact.ts",
+    "../../apps/kanban/src/orchestration/probe-result-artifact.types.ts",
+    "../../apps/kanban/src/orchestration/human-decision-resolution-policy.service.ts",
+    "../../apps/kanban/src/orchestration/human-decision-resolution-policy.types.ts"
+  ]
+}

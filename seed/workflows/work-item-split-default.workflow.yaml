@@ -1,0 +1,129 @@
+workflow_id: work_item_split_default
+name: Work Item Split - Oversized Item Decompose/Promote
+description: |
+  Triggered when an oversized (13 story points) or CEO-flagged work item enters refinement, and it has not
+  already been resolved into children. A CEO decision step decides, per item, whether to decompose it into
+  same-container child work items or to promote it to an epic (detaching any parent) before decomposing.
+  Either way the original item becomes a non-dispatchable container automatically once it has children -
+  no explicit status transition is required.
+trigger:
+  type: event
+  event: kanban.work_item.status_changed.v1
+  condition: "{{#if (and (eq trigger.status 'refinement') trigger.resource (or (eq trigger.resource.storyPoints 13) trigger.resource.metadata.split.ceoFlagged) (not trigger.resource.parentWorkItemId))}}true{{else}}false{{/if}}"
+concurrency:
+  max_runs: 1
+  scope: trigger.contextId
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+jobs:
+  - id: ceo_split_decision
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - decision
+        - children
+      types:
+        decision: string
+        children:
+          type: array
+          items:
+            type: object
+            properties:
+              title: string
+              type: string
+              description: string
+      optional:
+        - rationale
+    max_retries: 2
+    retry_prompt: |
+      You have NOT called set_job_output yet. Call set_job_output exactly once with a native object: { "decision": "decompose" | "promote", "children": [ { "title": "...", "type": "task"|"bug"|"spike"|"story", "description": "..." }, ... ], "rationale": "..." (optional) }.
+    inputs:
+      agent_profile: ceo-agent
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: decide_split
+        type: agent
+        prompt_file: prompts/work-item-split-default/ceo-split-decision.md
+  - id: promote_to_epic
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - ceo_split_decision
+    condition: "{{#if (eq jobs.ceo_split_decision.output.decision 'promote')}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_update
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        updates:
+          type: epic
+          parentWorkItemId: null
+          storyPoints: null
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+  - id: decompose_children
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - ceo_split_decision
+      - promote_to_epic
+    condition: "{{#if jobs.ceo_split_decision.output.children}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.propose_work_items
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        parentWorkItemId: "{{ trigger.contextId }}"
+        items: "{{ jobs.ceo_split_decision.output.children }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*

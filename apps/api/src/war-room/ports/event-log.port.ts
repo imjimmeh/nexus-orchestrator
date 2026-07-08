@@ -1,0 +1,1 @@
+export const WAR_ROOM_EVENT_LOG_PORT = Symbol('WAR_ROOM_EVENT_LOG_PORT');

@@ -1,0 +1,179 @@
+workflow_id: design_ingestion_existing_project
+name: Design Ingestion — Existing Project
+description: >
+  Ingestion pipeline for adding new design inputs to an existing project.
+  Performs delta analysis against existing PRD/SDD and creates only net-new work items.
+
+trigger:
+  type: manual
+  inputs:
+    - name: projectId
+      type: string
+      required: true
+    - name: files
+      type: array
+      required: false
+    - name: urls
+      type: array
+      required: false
+    - name: workItemId
+      type: string
+      required: true
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: fetch_url
+      - effect: allow
+        tool: read_document
+      - effect: allow
+        tool: analyze_image
+      - effect: allow
+        tool: extract_figma
+      - effect: allow
+        tool: create_artifact
+      - effect: allow
+        tool: kanban.propose_work_items
+
+jobs:
+  - id: provision_worktree
+    type: git_operation
+    tier: light
+    inputs:
+      action: provision_worktree
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: main
+      target_branch: "ingestion/{{ trigger.workItemId }}"
+
+  - id: place_inputs
+    type: execution
+    tier: light
+    depends_on: [provision_worktree]
+    inputs:
+      agent_profile: ingestion_runner
+    steps:
+      - id: place
+        type: agent
+        prompt: |
+          Copy all new input files into design-inputs/new-{{ trigger.workItemId }}/
+          Save URL references as docs/urls/update-{{ trigger.workItemId }}.md
+          Commit all files.
+
+  - id: load_existing_artifacts
+    type: execution
+    tier: light
+    depends_on: [place_inputs]
+    inputs:
+      agent_profile: ingestion_runner
+    steps:
+      - id: load
+        type: agent
+        prompt: |
+          Verify the following files exist in the worktree:
+          - docs/PRD.md
+          - docs/SDD.md
+          Read both files. Use set_job_output to report:
+          { "prd_exists": true, "sdd_exists": true }
+
+  - id: delta_analysis
+    type: execution
+    tier: heavy
+    depends_on: [load_existing_artifacts]
+    inputs:
+      agent_profile: design-analyst
+      prompt_file: prompts/design-ingestion/delta-analysis.md
+    steps:
+      - id: analyze
+        type: agent
+        prompt_file: prompts/design-ingestion/delta-analysis.md
+
+  - id: verify_analysis_commits
+    type: execution
+    tier: light
+    depends_on: [delta_analysis]
+    inputs:
+      agent_profile: git_verifier
+    steps:
+      - id: verify
+        type: agent
+        prompt_file: prompts/design-ingestion/verify-commits.md
+
+  - id: update_prd
+    type: execution
+    tier: heavy
+    depends_on: [verify_analysis_commits]
+    inputs:
+      agent_profile: product_manager_ingestion
+    steps:
+      - id: update
+        type: agent
+        prompt: |
+          Read docs/PRD.md and the latest delta analysis in docs/analysis/delta-*.md
+          Update docs/PRD.md to incorporate new and changed requirements.
+          Add a changelog entry at the top noting what changed.
+          Commit: "docs: update PRD with delta requirements"
+          Use set_job_output to report: { "requirements_added": 0, "requirements_changed": 0 }
+
+  - id: update_sdd
+    type: execution
+    tier: heavy
+    depends_on: [update_prd]
+    inputs:
+      agent_profile: technical_architect_ingestion
+    steps:
+      - id: update
+        type: agent
+        prompt: |
+          Read updated docs/PRD.md and docs/SDD.md.
+          Update docs/SDD.md to reflect new requirements from the PRD update.
+          Commit: "docs: update SDD with delta requirements"
+          Use set_job_output to report: { "components_added": 0, "apis_added": 0 }
+
+  - id: validate_artifacts
+    type: execution
+    tier: heavy
+    depends_on: [update_sdd]
+    inputs:
+      agent_profile: technical_architect_ingestion
+    steps:
+      - id: validate
+        type: agent
+        prompt: |
+          Cross-reference updated PRD and SDD. Verify consistency.
+          Commit any fixes. Report status via set_job_output.
+
+  - id: merge_worktree
+    type: git_operation
+    tier: light
+    depends_on: [validate_artifacts]
+    inputs:
+      action: merge
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: main
+      target_branch: "ingestion/{{ trigger.workItemId }}"
+
+  - id: create_work_items
+    type: execution
+    tier: heavy
+    depends_on: [merge_worktree]
+    inputs:
+      agent_profile: product_manager_ingestion
+    steps:
+      - id: create
+        type: agent
+        prompt: |
+          Read docs/analysis/delta-*.md to identify net-new requirements only.
+          Use kanban.propose_work_items to create draft tasks for new requirements only.
+          Do NOT create work items for unchanged requirements.
+          Set source: design_ingestion metadata on all items.
+          Use set_job_output: { "status": "complete", "new_work_items": [] }

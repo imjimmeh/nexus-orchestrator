@@ -1,0 +1,1 @@
+export const HARNESS_HTTP_CLIENT = Symbol('HARNESS_HTTP_CLIENT');

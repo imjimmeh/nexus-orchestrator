@@ -1,0 +1,111 @@
+workflow_id: project_orchestration_refinement_ceo
+name: Project Orchestration Mid-Flight Refinement (CEO)
+description: >
+  Runs during orchestrating status to refresh strategy/spec context without
+  relaunching bootstrap-only discovery/spec-generation workflows.
+
+trigger:
+  type: event
+  name: ProjectOrchestrationRefinementRequestedEvent
+
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: queue
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: get_capabilities
+      - effect: allow
+        tool: get_agent_profiles
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.work_item
+      - effect: allow
+        tool: kanban.orchestration_timeline
+      - effect: allow
+        tool: kanban.orchestration_activity
+      - effect: allow
+        tool: invoke_agent_workflow
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: refine_strategy_and_specs
+    type: execution
+    tier: heavy
+    output_contract:
+      required: [decision, actions_taken]
+      optional: [delegated_run_ids, specs_changed, spec_paths]
+    inputs:
+      agent_profile: ceo-agent
+      goals: "{{ trigger.goals }}"
+      refinement_reason: "{{ trigger.reason }}"
+      state_summary: "{{ trigger.stateSummary }}"
+    steps:
+      - id: refine
+        prompt: |
+          You are running a mid-flight refinement cycle for project {{trigger.scopeId}}.
+
+          Context:
+          - Orchestration ID: {{trigger.orchestrationId}}
+          {{#if inputs.goals}}
+          - Goals: {{inputs.goals}}
+          {{else}}
+          - Goals were not supplied in the trigger. Use persisted goals from
+            persisted orchestration/project context as the source of truth.
+          {{/if}}
+          - Refinement reason: {{inputs.refinement_reason}}
+          - State summary: {{inputs.state_summary}}
+
+          Required process:
+          0) If project {{trigger.scopeId}} is missing or blank, do not invent
+             placeholders such as "default". Call set_job_output with decision
+             "blocked" and actions_taken describing the missing project context.
+           1) Query project state and inspect persisted orchestration state.
+             If the refinement reason or current decision depends on one specific existing work item, call `kanban.work_item` for that item and inspect focused metadata such as `feedbackNeeded`, `decisionPrompt`, and `humanDecisionResponse` before deciding how to refine strategy.
+          2) If specialist updates are needed, delegate with invoke_agent_workflow using
+             agent_profile only (architect-agent, product-manager, or spec-generator).
+             Do not invoke bootstrap workflows.
+             Use the returned workflow_run_id or run_id for follow-up checks; never
+             use correlation_id as a workflow run ID.
+          3) Produce an updated strategy summary in set_job_output.
+          4) Call set_job_output with your rationale and explicit actions taken:
+             {
+               "decision": "Summary of strategic decision made.",
+               "actions_taken": "Description of delegations and updates applied.",
+               "delegated_run_ids": ["run-id-1", "run-id-2"],
+               "specs_changed": true,
+               "spec_paths": ["docs/prd.md", "docs/sdd.md"]
+             }
+
+          Goal:
+          - Improve strategy/spec direction while preserving orchestration continuity.
+          - Do not restart discovery bootstrap.
+
+  - id: emit_refinement_completed
+    type: emit_event
+    tier: light
+    depends_on: [refine_strategy_and_specs]
+    inputs:
+      event_name: ProjectOrchestrationRefinementCompletedEvent
+      payload:
+        event: ProjectOrchestrationRefinementCompletedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"

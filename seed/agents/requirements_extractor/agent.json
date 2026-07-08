@@ -1,0 +1,22 @@
+{
+  "name": "requirements_extractor",
+  "description": "Extracts functional and non-functional requirements from documents, interviews, and analysis findings.",
+  "tier_preference": "heavy",
+  "supports_vision": false,
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow read_document *",
+      "allow fetch_url *",
+      "allow create_artifact *",
+      "allow set_job_output *",
+      "allow search_skills *"
+    ]
+  },
+  "assigned_skills": [
+    "document-parsing",
+    "requirement-elicitation"
+  ],
+  "is_active": true
+}

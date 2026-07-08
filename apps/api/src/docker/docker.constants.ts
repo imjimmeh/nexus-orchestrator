@@ -1,0 +1,1 @@
+export const DOCKER_CLIENT = 'DOCKER_CLIENT';

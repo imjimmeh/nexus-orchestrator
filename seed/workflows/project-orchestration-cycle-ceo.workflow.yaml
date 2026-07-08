@@ -1,0 +1,279 @@
+workflow_id: project_orchestration_cycle_ceo
+name: Project Orchestration Cycle (CEO)
+description: >
+  Runs on work-item completion events, checks orchestration status, and lets
+  the CEO agent decide whether to dispatch additional work or close orchestration.
+  Per-phase autonomy (dispatch, backlog_promotion) flows from vars.autonomy.*
+  (set by Phase 1 engine injection, scoped to trigger.scopeId). Entry point
+  collects board state (todo_count, backlog_count, autonomous_mode) before
+  delegating to decision logic with mandatory backlog promotion rules for
+  zero-todo autonomous boards.
+
+  ⚠️ MANDATORY BACKLOG PROMOTION: When autonomous_mode=true, todo_count=0, and
+  backlog_count>0 with unblocked items, the CEO MUST choose one of: (a) promote
+  item to todo, (b) patch exec_config to make candidate safe, (c) create and
+  promote new work item, OR (d) produce repeat with per-item blockedReason fields.
+  Bare repeat with no mutation is FORBIDDEN per the ZERO-TODO BACKLOG PROMOTION
+  MANDATE.
+
+inputs:
+  autonomous_mode: true # boolean, default true for autonomous orchestration (fallback for manual launch; phase autonomy flows from vars.autonomy.dispatch/backlog_promotion)
+
+trigger:
+  type: event
+  name: ProjectOrchestrationCycleRequestedEvent
+
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: skip
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: get_capabilities
+      - effect: allow
+        tool: get_agent_profiles
+      - effect: allow
+        tool: create_agent_profile
+      - effect: allow
+        tool: kanban.work_item
+      - effect: allow
+        tool: kanban.work_item_transition_status
+      - effect: allow
+        tool: kanban.work_item_restart_execution
+      - effect: allow
+        tool: kanban.work_item_patch_execution_config
+      - effect: allow
+        tool: kanban.work_item_update
+      - effect: allow
+        tool: kanban.get_charter
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.list_work_items
+      - effect: allow
+        tool: kanban.orchestration_timeline
+      - effect: allow
+        tool: kanban.orchestration_activity
+      - effect: allow
+        tool: kanban.publish_specs
+      - effect: allow
+        tool: kanban.complete_orchestration_cycle_decision
+      - effect: allow
+        tool: kanban.orchestration_complete
+      - effect: allow
+        tool: kanban.reset_orchestration_intents
+      - effect: allow
+        tool: kanban.dispatch_selected_work_items
+      - effect: allow
+        tool: await_agent_workflow
+      - effect: allow
+        tool: list_running_workflows
+      - effect: allow
+        tool: delegate_goal_backlog_planning
+      - effect: allow
+        tool: delegate_imported_repo_discovery
+      - effect: allow
+        tool: delegate_orchestration_advisor
+      - effect: allow
+        tool: delegate_work_item_generation
+      - effect: allow
+        tool: delegate_spec_revision
+      - effect: allow
+        tool: delegate_orchestration_refinement
+      - effect: allow
+        tool: delegate_rediscovery
+      - effect: allow
+        tool: delegate_roadmap_planning
+      - effect: allow
+        tool: delegate_ui_ux_testing
+      - effect: allow
+        tool: delegate_web_research
+      - effect: allow
+        tool: kanban.goal_create
+      - effect: allow
+        tool: kanban.goal_update
+      - effect: allow
+        tool: kanban.goal_update_status
+      - effect: allow
+        tool: kanban.goal_add_note
+      - effect: allow
+        tool: kanban.record_project_memory
+      - effect: allow
+        tool: kanban.update_charter
+      - effect: allow
+        tool: delegate_design_ingestion
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: kanban.record_strategic_intent
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+# Contract test integration points for ZERO-TODO BACKLOG PROMOTION MANDATE
+# See: prompts/project-orchestration-cycle-ceo/test_ceo_zero_todo_mandate.spec.md
+contract_tests:
+  - test_file: prompts/project-orchestration-cycle-ceo/test_ceo_zero_todo_mandate.spec.md
+    description: "CEO zero-todo backlog promotion mandate contract tests"
+    test_cases:
+      TC-001: "promote when todo_count=0, backlog_count>0, safe unblocked items exist"
+      TC-002: "patch when todo_count=0, backlog_count>0, fixable config blocker"
+      TC-003: "create when todo_count=0, backlog_count>0, no suitable backlog"
+      TC-004: "repeat with blockedItems when todo_count=0, backlog_count>0, all items blocked"
+      TC-005: "blocked when todo_count=0, backlog_count>0, systemic ticket-level blocker"
+      TC-006: "VIOLATION: bare repeat when todo_count=0, backlog_count>0, unblocked backlog"
+      TC-007: "VIOLATION: repeat with generic reason when backlog_count>0"
+      TC-008: "VIOLATION: repeat with 'Will monitor' reason when backlog_count>0"
+      TC-009: "VIOLATION: repeat with 'Board is idle' reason when unblocked backlog exists"
+      TC-010: "VIOLATION: human-decision blockers interpreted as board-wide blockers"
+      TC-011: "VIOLATION: repeat without blockedItems array when backlog_count>0"
+      TC-012: "VIOLATION: repeat with placeholder blockedItems (no actual UUIDs)"
+
+jobs:
+  - id: load_state
+    type: mcp_tool_call
+    tier: light
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.project_state
+      params:
+        project_id: "{{ trigger.scopeId }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.project_state
+
+  # Threshold from vars.gates.rediscovery_merge_threshold (seeded default: 10).
+  - id: rediscovery_gate
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [load_state]
+    condition: "{{#if (gte jobs.load_state.output.result.strategic.staleness.mergesSinceDiscovery vars.gates.rediscovery_merge_threshold)}}true{{else}}false{{/if}}"
+    workflow_id: project_codebase_deep_investigation
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      mode: refresh
+
+  - id: roadmap_planning_gate
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [rediscovery_gate]
+    condition: "{{#if (and vars.gates.roadmap_when_no_active_initiative (eq jobs.load_state.output.result.strategic.staleness.activeNowInitiativeCount 0))}}true{{else}}false{{/if}}"
+    workflow_id: project_roadmap_planning
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      reason: "Deterministic gate: no active now-horizon initiative."
+
+  # Threshold from vars.gates.ideation_starvation_cycles (seeded default: 2).
+  # Burn-rate-zero branch covers the new/stalled (null forecast) case.
+  - id: ideation_gate
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [roadmap_planning_gate]
+    condition: "{{#if (and vars.backlog.ideation_enabled (or (eq jobs.load_state.output.result.strategic.staleness.recentBurnRatePerCycle 0) (lte jobs.load_state.output.result.strategic.staleness.starvationForecastCycles vars.gates.ideation_starvation_cycles)))}}true{{else}}false{{/if}}"
+    workflow_id: project_goal_backlog_planning
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      reason: "Deterministic gate: backlog starvation forecast at/under threshold."
+
+  - id: strategize
+    type: execution
+    tier: heavy
+    depends_on: [ideation_gate]
+    workspace: true
+    max_retries: 2
+    max_step_loops: 10
+    output_contract:
+      required: [groomed_board_summary]
+      types:
+        groomed_board_summary:
+          type: object
+          properties:
+            todo_count: number
+            backlog_count: number
+            linkedRunCount: number
+            dispatchableTodoCount: number
+            autonomous_mode: boolean
+            promotion_candidates:
+              type: array
+              items:
+                type: object
+                properties:
+                  candidateId: string
+                  title: string
+                  priority: string
+                  initiativeId: string
+            strategic_intent: string
+            groomed_changes:
+              type: array
+              items:
+                type: object
+                properties:
+                  changedResourceId: string
+                  change: string
+    inputs:
+      agent_profile: ceo-agent
+      state_summary: "{{ trigger.stateSummary }}"
+      is_restart: "{{ trigger.isRestart }}"
+      autonomous_mode: "{{#if (eq vars.autonomy.dispatch 'auto')}}true{{else}}false{{/if}}"
+      project_id: "{{ trigger.scopeId }}"
+    steps:
+      - id: strategize
+        prompt_file: prompts/project-orchestration-cycle-ceo/strategize.md
+
+  - id: promote_safe_backlog
+    type: mcp_tool_call
+    tier: light
+    depends_on: [strategize]
+    condition: "{{#if (and (lt jobs.strategize.output.groomed_board_summary.todo_count vars.backlog.target_todo_depth) (eq vars.autonomy.backlog_promotion 'auto'))}}true{{else}}false{{/if}}"
+    for_each: "{{ jobs.strategize.output.groomed_board_summary.promotion_candidates }}"
+    continue_on_error: true
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ item.workItemId }}"
+        status: todo
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.work_item_transition_status
+
+  - id: dispatch
+    type: execution
+    tier: heavy
+    workspace: true
+    depends_on: [promote_safe_backlog]
+    max_retries: 2
+    max_step_loops: 10
+    output_contract:
+      required: [decision, linked_run_id]
+      forbidden:
+        - description: "Bare repeat with no mutation when todo_count=0 and backlog_count>0"
+          condition: "decision == 'repeat' AND todo_count == 0 AND backlog_count > 0 AND blockedItems == null"
+    inputs:
+      agent_profile: ceo-agent
+      state_summary: "{{ trigger.stateSummary }}"
+      is_restart: "{{ trigger.isRestart }}"
+      autonomous_mode: "{{#if (eq vars.autonomy.dispatch 'auto')}}true{{else}}false{{/if}}"
+      project_id: "{{ trigger.scopeId }}"
+      groomed_board_summary: "{{ jobs.strategize.output.groomed_board_summary }}"
+    steps:
+      - id: dispatch
+        prompt_file: prompts/project-orchestration-cycle-ceo/dispatch.md

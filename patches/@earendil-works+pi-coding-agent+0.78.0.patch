@@ -1,0 +1,71 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js b/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js
+index 66b2ab3..617d3b8 100644
+--- a/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js
++++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js
+@@ -682,7 +682,11 @@ export class AgentSession {
+             this._retryAttempt = 0;
+         }
+         if (await this._checkCompaction(msg)) {
+-            return true;
++            // PATCH earendil-works/pi#5463: only continue after compaction when
++            // there is actual queued work; otherwise continue() is called with a
++            // trailing assistant turn and throws "Cannot continue from message
++            // role: assistant".
++            return this.agent.hasQueuedMessages();
+         }
+         // The agent loop drains both queues before emitting agent_end. Any messages
+         // here were queued by agent_end extension handlers and need a continuation.
+@@ -1427,10 +1431,13 @@ export class AgentSession {
+             this._overflowRecoveryAttempted = true;
+             // Remove the error message from agent state (it IS saved to session for history,
+             // but we don't want it in context for the retry)
+-            const messages = this.agent.state.messages;
+-            if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+-                this.agent.state.messages = messages.slice(0, -1);
++            // PATCH earendil-works/pi#5445: strip ALL consecutive trailing assistant
++            // turns, not just one, so continue() never resumes from an assistant role.
++            let messages = this.agent.state.messages;
++            while (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
++                messages = messages.slice(0, -1);
+             }
++            this.agent.state.messages = messages;
+             return await this._runAutoCompaction("overflow", true);
+         }
+         // Case 2: Threshold - context is getting large
+@@ -1586,10 +1593,17 @@ export class AgentSession {
+             };
+             this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
+             if (willRetry) {
+-                const messages = this.agent.state.messages;
++                // PATCH earendil-works/pi#5445: after dropping a trailing error
++                // turn, also drop any consecutive assistant turns it exposed so
++                // continue() does not resume from an assistant role.
++                let messages = this.agent.state.messages;
+                 const lastMsg = messages[messages.length - 1];
+                 if (lastMsg?.role === "assistant" && lastMsg.stopReason === "error") {
+-                    this.agent.state.messages = messages.slice(0, -1);
++                    messages = messages.slice(0, -1);
++                    while (messages.length > 0 && messages[messages.length - 1]?.role === "assistant") {
++                        messages = messages.slice(0, -1);
++                    }
++                    this.agent.state.messages = messages;
+                 }
+                 return true;
+             }
+@@ -1989,10 +2003,13 @@ export class AgentSession {
+             errorMessage: message.errorMessage || "Unknown error",
+         });
+         // Remove error message from agent state (keep in session for history)
+-        const messages = this.agent.state.messages;
+-        if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+-            this.agent.state.messages = messages.slice(0, -1);
++        // PATCH earendil-works/pi#5445: strip ALL consecutive trailing assistant
++        // turns so the retry continue() does not resume from an assistant role.
++        let messages = this.agent.state.messages;
++        while (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
++            messages = messages.slice(0, -1);
+         }
++        this.agent.state.messages = messages;
+         // Wait with exponential backoff (abortable)
+         this._retryAbortController = new AbortController();
+         try {

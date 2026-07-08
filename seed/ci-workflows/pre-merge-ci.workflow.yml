@@ -1,0 +1,102 @@
+workflow_id: pre_merge_ci
+name: Pre-Merge CI
+description: |
+  Blocks merge until linting and unit tests pass for the Nexus Orchestrator monorepo. Runs as a lifecycle gate before merge.
+trigger:
+  type: lifecycle
+  phase: merge
+  hook: before
+  blocking: true
+permissions:
+  allow_tools:
+    - bash
+    - read
+  deny_tools: []
+active: true
+jobs:
+  - id: build_core
+    type: run_command
+    tier: light
+    inputs:
+      command: npm run build --workspace=packages/core
+      working_dir: "{{ trigger.payload.workspace }}"
+    host_mounts: []
+    command: npm run build --workspace=packages/core
+    working_dir: "{{ trigger.payload.workspace }}"
+  - id: lint_api
+    type: run_command
+    tier: light
+    inputs:
+      command: npm run lint:api
+      working_dir: "{{ trigger.payload.workspace }}"
+    host_mounts: []
+    command: npm run lint:api
+    working_dir: "{{ trigger.payload.workspace }}"
+    depends_on:
+      - build_core
+  - id: lint_kanban
+    type: run_command
+    tier: light
+    inputs:
+      command: npm run lint:kanban
+      working_dir: "{{ trigger.payload.workspace }}"
+    host_mounts: []
+    command: npm run lint:kanban
+    working_dir: "{{ trigger.payload.workspace }}"
+    depends_on:
+      - build_core
+  - id: lint_packages
+    type: run_command
+    tier: light
+    inputs:
+      command: npm run lint:packages
+      working_dir: "{{ trigger.payload.workspace }}"
+    host_mounts: []
+    command: npm run lint:packages
+    working_dir: "{{ trigger.payload.workspace }}"
+    depends_on:
+      - build_core
+  - id: lint_web
+    type: run_command
+    tier: light
+    inputs:
+      command: npm run lint:web
+      working_dir: "{{ trigger.payload.workspace }}"
+    host_mounts: []
+    command: npm run lint:web
+    working_dir: "{{ trigger.payload.workspace }}"
+    depends_on:
+      - build_core
+  - id: test_api
+    type: run_command
+    tier: heavy
+    inputs:
+      command: npm run test:api
+      working_dir: "{{ trigger.payload.workspace }}"
+    host_mounts: []
+    command: npm run test:api
+    working_dir: "{{ trigger.payload.workspace }}"
+    depends_on:
+      - lint_api
+  - id: test_kanban
+    type: run_command
+    tier: heavy
+    inputs:
+      command: npm run test:kanban
+      working_dir: "{{ trigger.payload.workspace }}"
+    host_mounts: []
+    command: npm run test:kanban
+    working_dir: "{{ trigger.payload.workspace }}"
+    depends_on:
+      - lint_kanban
+  - id: test_web
+    type: run_command
+    tier: heavy
+    inputs:
+      command: npm run test:unit:web
+      working_dir: "{{ trigger.payload.workspace }}"
+    host_mounts: []
+    command: npm run test:unit:web
+    working_dir: "{{ trigger.payload.workspace }}"
+    depends_on:
+      - lint_web

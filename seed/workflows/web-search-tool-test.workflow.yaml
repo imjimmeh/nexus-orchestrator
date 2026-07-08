@@ -1,0 +1,99 @@
+workflow_id: web_search_tool_test_workflow
+name: Web Search Tool Registration Test Workflow
+description: >
+  Test workflow where one agent generates tool code, a register_tool job saves
+  it, and a final summary confirms registration.
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: author_web_search_tool
+    type: execution
+    tier: light
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: author
+        prompt: |
+          Create TypeScript implementation code for a tool named web_search_http_agent_generated.
+          The tool must export:
+
+          export const tool = {
+            execute: async (params: { query: string; max_results?: number }) => { ... }
+          };
+
+          Behavior requirements:
+          - No network calls (mock/stub output only).
+          - Return object with keys: ok, provider, query, max_results, results.
+          - results must be an array containing at least one item with title, url, snippet.
+
+          Return ONLY a fenced JSON block in this exact format:
+          ```json
+          {
+            "typescript_code": "<tool code string>"
+          }
+          ```
+
+          Do not include any explanation text before or after the fenced JSON block.
+
+          When finished, call `step_complete`.
+
+  - id: register_web_search_tool
+    type: register_tool
+    tier: light
+    depends_on: [author_web_search_tool]
+    inputs:
+      name: web_search_http_agent_generated
+      schema:
+        type: object
+        properties:
+          query:
+            type: string
+            description: Search query text.
+          max_results:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 5
+            description: Maximum number of items to return.
+        required: [query]
+      typescript_code: '{{jobs.author_web_search_tool.output.structured.typescript_code}}'
+      tier_restriction: 1
+
+  - id: summarize
+    type: execution
+    tier: light
+    depends_on: [register_web_search_tool]
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: summarize_step
+        prompt: |
+          Summarize whether the workflow successfully:
+          1) generated tool code via agent output,
+          2) registered the tool.
+
+          When finished, call `step_complete`.

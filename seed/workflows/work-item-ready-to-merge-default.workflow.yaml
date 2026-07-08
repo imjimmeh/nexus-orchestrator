@@ -1,0 +1,775 @@
+workflow_id: work_item_ready_to_merge_default
+name: Work Item Ready-to-Merge Default Auto-Merge
+description: >
+  Core default workflow that attempts to merge a ready-to-merge work item into
+  its base branch. The base is merged into the work item's worktree, an in-container
+  quality gate (build/lint/unit tests) validates the result, and only then is the
+  feature branch integrated into the base with a hook-free push. Merge conflicts
+  and quality-gate failures are handled by bounded agent remediation passes.
+
+trigger:
+  type: event
+  event: kanban.work_item.status_changed.v1
+  condition: "{{#if (eq trigger.status 'ready-to-merge')}}true{{else}}false{{/if}}"
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: yield_session
+      - effect: allow
+        tool: open_war_room
+      - effect: allow
+        tool: invite_war_room_participant
+      - effect: allow
+        tool: post_war_room_message
+      - effect: allow
+        tool: close_war_room
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: set_job_output
+
+jobs:
+  - id: merge_prepare
+    type: git_operation
+    tier: light
+    inputs:
+      action: merge_prepare
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+    transitions:
+      # Pre-flight gate disabled (PR repos only): skip the in-container gate and
+      # let the provider's required checks be the gate of record.
+      - condition: >-
+          jobs.merge_prepare.output.merge_outcome == 'succeeded' &&
+          trigger.integration_strategy == 'pull-request' &&
+          trigger.integration_preflight_gate == false
+        next: merge_integrate
+      - condition: "jobs.merge_prepare.output.merge_outcome == 'succeeded'"
+        next: quality_gate
+      - condition: "jobs.merge_prepare.output.merge_outcome == 'conflict'"
+        next: resolve_local_conflicts
+      - condition: "jobs.merge_prepare.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_prepare.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: quality_gate
+    type: execution
+    tier: heavy # heavy image has python3; light/api do not
+    depends_on: [merge_prepare]
+    steps:
+      - id: run_gate
+        type: run_command
+        working_dir: /workspace
+        timeout_ms: 1200000 # 20m; full suite ran ~390s, leave headroom
+        command: "npm run build && npm run lint && npm run test:api && npm run test:kanban && npm run test:unit:web"
+        # Always complete the job so the DAG can branch on the gate verdict. A
+        # failing run_command (non-zero exit) would otherwise fail the job, and a
+        # failed job is terminal (its transitions never run) — so a failing gate
+        # must complete-with-verdict, not throw. The verdict lives in the step
+        # output (run_gate.ok), surfaced via jobs.quality_gate.output.outputs.run_gate.
+        transitions:
+          - condition: "true"
+            next: done
+    transitions:
+      - condition: >-
+          jobs.quality_gate.output.outputs.run_gate.ok == true &&
+          trigger.integration_strategy == 'pull-request'
+        next: merge_integrate
+      - condition: "jobs.quality_gate.output.outputs.run_gate.ok == true"
+        next: merge_integrate_preflight
+      - condition: "jobs.quality_gate.output.outputs.run_gate.ok == false"
+        next: remediate_quality_gate
+
+  - id: merge_integrate_preflight
+    type: git_operation
+    tier: light
+    # Valid on both the gated path and before any direct push. The PR gate-skip
+    # path intentionally continues straight to merge_integrate because PR
+    # integration does not overwrite the shared clone's base branch.
+    depends_on: [merge_prepare]
+    inputs:
+      action: merge_integrate_preflight
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+    transitions:
+      - condition: "jobs.merge_integrate_preflight.output.merge_outcome == 'succeeded'"
+        next: merge_integrate
+      - condition: "jobs.merge_integrate_preflight.output.merge_outcome == 'shared_clone_dirty'"
+        next: reconcile_shared_clone_deterministic
+      - condition: "jobs.merge_integrate_preflight.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_preflight.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: reconcile_shared_clone_deterministic
+    type: git_operation
+    tier: light
+    # Deterministic reconciliation runs first: restores tracked deletions and
+    # quarantines stray untracked files algorithmically. Only genuinely
+    # ambiguous remaining dirt falls through to the LLM hygiene agent below.
+    depends_on: [merge_integrate_preflight]
+    inputs:
+      action: merge_integrate_reconcile
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+    transitions:
+      - condition: "jobs.reconcile_shared_clone_deterministic.output.merge_outcome == 'succeeded'"
+        next: merge_integrate
+      - condition: "jobs.reconcile_shared_clone_deterministic.output.merge_outcome == 'shared_clone_dirty'"
+        next: reconcile_shared_clone_hygiene
+      - condition: "jobs.reconcile_shared_clone_deterministic.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.reconcile_shared_clone_deterministic.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: reconcile_shared_clone_hygiene
+    type: execution
+    tier: heavy
+    depends_on: [reconcile_shared_clone_deterministic]
+    max_retries: 1
+    inputs:
+      agent_profile: architect-agent
+    output_contract:
+      required: [ok, response]
+      types:
+        ok: boolean
+        response: string
+    steps:
+      - id: reconcile_hygiene
+        type: agent
+        prompt_file: prompts/work-item-ready-to-merge/reconcile-shared-clone-hygiene.md
+    transitions:
+      - condition: "jobs.reconcile_shared_clone_hygiene.output.ok == true"
+        next: merge_integrate_preflight_after_hygiene
+      - condition: "jobs.reconcile_shared_clone_hygiene.output.ok == false"
+        next: emit_merge_failed
+
+  - id: merge_integrate_preflight_after_hygiene
+    type: git_operation
+    tier: light
+    depends_on: [reconcile_shared_clone_hygiene]
+    inputs:
+      action: merge_integrate_preflight
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+    transitions:
+      - condition: "jobs.merge_integrate_preflight_after_hygiene.output.merge_outcome == 'succeeded'"
+        next: merge_integrate
+      - condition: "jobs.merge_integrate_preflight_after_hygiene.output.merge_outcome == 'shared_clone_dirty'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_preflight_after_hygiene.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_preflight_after_hygiene.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: merge_integrate
+    type: git_operation
+    tier: light
+    # Upstream on BOTH the gated (merge_prepare -> quality_gate -> merge_integrate)
+    # and the pre-flight-skip (merge_prepare -> merge_integrate) paths. Depending
+    # on quality_gate would block the skip path where that job is condition-skipped.
+    depends_on: [merge_prepare]
+    inputs:
+      action: merge_integrate
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+      integration_strategy: "{{ trigger.integration_strategy }}"
+      integration_merge_method: "{{ trigger.integration_merge_method }}"
+      integration_auto_merge: "{{ trigger.integration_auto_merge }}"
+      integration_preflight_gate: "{{ trigger.integration_preflight_gate }}"
+      repository_url: "{{ trigger.repository_url }}"
+      github_secret_id: "{{ trigger.github_secret_id }}"
+    transitions:
+      - condition: "jobs.merge_integrate.output.merge_outcome == 'succeeded'"
+        next: record_merge_metadata_clean
+      - condition: "jobs.merge_integrate.output.merge_outcome == 'pull_request_opened'"
+        next: record_pr_metadata
+      - condition: "jobs.merge_integrate.output.merge_outcome == 'conflict'"
+        next: resolve_remote_conflicts
+      - condition: "jobs.merge_integrate.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: resolve_local_conflicts
+    type: execution
+    tier: heavy
+    depends_on: [merge_prepare]
+    max_retries: 1
+    inputs:
+      agent_profile: architect-agent
+    output_contract:
+      required: [ok, response]
+      types:
+        ok: boolean
+        response: string
+    steps:
+      - id: resolve_local
+        type: agent
+        prompt_file: prompts/work-item-ready-to-merge/resolve-local-conflicts.md
+    transitions:
+      - condition: "jobs.resolve_local_conflicts.output.ok == true"
+        next: quality_gate
+      - condition: "jobs.resolve_local_conflicts.output.ok == false"
+        next: emit_merge_failed
+
+  - id: remediate_quality_gate
+    type: execution
+    tier: heavy
+    depends_on: [quality_gate]
+    max_retries: 1
+    inputs:
+      agent_profile: architect-agent
+    output_contract:
+      required: [ok, response]
+      types:
+        ok: boolean
+        response: string
+    steps:
+      - id: remediate
+        type: agent
+        prompt_file: prompts/work-item-ready-to-merge/remediate-quality-gate.md
+    transitions:
+      - condition: "jobs.remediate_quality_gate.output.ok == true"
+        next: quality_gate_after_remediation
+      - condition: "jobs.remediate_quality_gate.output.ok == false"
+        next: emit_merge_failed
+
+  - id: quality_gate_after_remediation
+    type: execution
+    tier: heavy # heavy image has python3; light/api do not
+    depends_on: [remediate_quality_gate]
+    steps:
+      - id: run_gate_after_remediation
+        type: run_command
+        working_dir: /workspace
+        timeout_ms: 1200000 # 20m; full suite ran ~390s, leave headroom
+        command: "npm run build && npm run lint && npm run test:api && npm run test:kanban && npm run test:unit:web"
+        transitions:
+          - condition: "true"
+            next: done
+    transitions:
+      - condition: >-
+          jobs.quality_gate_after_remediation.output.outputs.run_gate_after_remediation.ok == true &&
+          trigger.integration_strategy == 'pull-request'
+        next: merge_integrate_after_remediation
+      - condition: "jobs.quality_gate_after_remediation.output.outputs.run_gate_after_remediation.ok == true"
+        next: merge_integrate_preflight_after_remediation
+      - condition: "jobs.quality_gate_after_remediation.output.outputs.run_gate_after_remediation.ok == false"
+        next: emit_merge_failed
+
+  - id: merge_integrate_preflight_after_remediation
+    type: git_operation
+    tier: light
+    depends_on: [quality_gate_after_remediation]
+    inputs:
+      action: merge_integrate_preflight
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+    transitions:
+      - condition: "jobs.merge_integrate_preflight_after_remediation.output.merge_outcome == 'succeeded'"
+        next: merge_integrate_after_remediation
+      - condition: "jobs.merge_integrate_preflight_after_remediation.output.merge_outcome == 'shared_clone_dirty'"
+        next: reconcile_shared_clone_deterministic_after_remediation
+      - condition: "jobs.merge_integrate_preflight_after_remediation.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_preflight_after_remediation.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: reconcile_shared_clone_deterministic_after_remediation
+    type: git_operation
+    tier: light
+    # Mirrors reconcile_shared_clone_deterministic for the after-remediation
+    # path: deterministic reconciliation runs first, LLM hygiene agent is the
+    # fallback for genuinely ambiguous remaining dirt.
+    depends_on: [merge_integrate_preflight_after_remediation]
+    inputs:
+      action: merge_integrate_reconcile
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+    transitions:
+      - condition: "jobs.reconcile_shared_clone_deterministic_after_remediation.output.merge_outcome == 'succeeded'"
+        next: merge_integrate_after_remediation
+      - condition: "jobs.reconcile_shared_clone_deterministic_after_remediation.output.merge_outcome == 'shared_clone_dirty'"
+        next: reconcile_shared_clone_hygiene_after_remediation
+      - condition: "jobs.reconcile_shared_clone_deterministic_after_remediation.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.reconcile_shared_clone_deterministic_after_remediation.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: reconcile_shared_clone_hygiene_after_remediation
+    type: execution
+    tier: heavy
+    depends_on: [reconcile_shared_clone_deterministic_after_remediation]
+    max_retries: 1
+    inputs:
+      agent_profile: architect-agent
+    output_contract:
+      required: [ok, response]
+      types:
+        ok: boolean
+        response: string
+    steps:
+      - id: reconcile_hygiene_after_remediation
+        type: agent
+        prompt_file: prompts/work-item-ready-to-merge/reconcile-shared-clone-hygiene.md
+    transitions:
+      - condition: "jobs.reconcile_shared_clone_hygiene_after_remediation.output.ok == true"
+        next: merge_integrate_preflight_after_remediation_hygiene
+      - condition: "jobs.reconcile_shared_clone_hygiene_after_remediation.output.ok == false"
+        next: emit_merge_failed
+
+  - id: merge_integrate_preflight_after_remediation_hygiene
+    type: git_operation
+    tier: light
+    depends_on: [reconcile_shared_clone_hygiene_after_remediation]
+    inputs:
+      action: merge_integrate_preflight
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+    transitions:
+      - condition: "jobs.merge_integrate_preflight_after_remediation_hygiene.output.merge_outcome == 'succeeded'"
+        next: merge_integrate_after_remediation
+      - condition: "jobs.merge_integrate_preflight_after_remediation_hygiene.output.merge_outcome == 'shared_clone_dirty'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_preflight_after_remediation_hygiene.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_preflight_after_remediation_hygiene.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: merge_integrate_after_remediation
+    type: git_operation
+    tier: light
+    depends_on: [quality_gate_after_remediation]
+    inputs:
+      action: merge_integrate
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+      integration_strategy: "{{ trigger.integration_strategy }}"
+      integration_merge_method: "{{ trigger.integration_merge_method }}"
+      integration_auto_merge: "{{ trigger.integration_auto_merge }}"
+      integration_preflight_gate: "{{ trigger.integration_preflight_gate }}"
+      repository_url: "{{ trigger.repository_url }}"
+      github_secret_id: "{{ trigger.github_secret_id }}"
+    transitions:
+      - condition: "jobs.merge_integrate_after_remediation.output.merge_outcome == 'succeeded'"
+        next: record_merge_metadata_remediated
+      - condition: "jobs.merge_integrate_after_remediation.output.merge_outcome == 'pull_request_opened'"
+        next: record_pr_metadata_remediated
+      - condition: "jobs.merge_integrate_after_remediation.output.merge_outcome == 'conflict'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_after_remediation.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_after_remediation.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: resolve_remote_conflicts
+    type: execution
+    tier: heavy
+    depends_on: [merge_integrate]
+    max_retries: 1
+    inputs:
+      agent_profile: architect-agent
+    output_contract:
+      required: [ok, response]
+      types:
+        ok: boolean
+        response: string
+    steps:
+      - id: resolve_remote
+        type: agent
+        prompt_file: prompts/work-item-ready-to-merge/resolve-remote-conflicts.md
+    transitions:
+      - condition: "jobs.resolve_remote_conflicts.output.ok == true"
+        next: merge_integrate_after_remote
+      - condition: "jobs.resolve_remote_conflicts.output.ok == false"
+        next: emit_merge_failed
+
+  - id: merge_integrate_after_remote
+    type: git_operation
+    tier: light
+    depends_on: [resolve_remote_conflicts]
+    inputs:
+      action: merge_integrate
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+    transitions:
+      - condition: "jobs.merge_integrate_after_remote.output.merge_outcome == 'succeeded'"
+        next: record_merge_metadata_conflict
+      - condition: "jobs.merge_integrate_after_remote.output.merge_outcome == 'conflict'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_after_remote.output.merge_outcome == 'auth_error'"
+        next: emit_merge_failed
+      - condition: "jobs.merge_integrate_after_remote.output.merge_outcome == 'failed'"
+        next: emit_merge_failed
+
+  - id: record_merge_metadata_clean
+    type: mcp_tool_call
+    tier: light
+    depends_on: [merge_integrate]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          lifecycle:
+            merge:
+              status: succeeded
+              sourceBranch: "{{ jobs.merge_integrate.output.source_branch }}"
+              destinationBranch: "{{ jobs.merge_integrate.output.destination_branch }}"
+              resolvedByAgent: true
+      policy: &kanban_mcp_policy
+        allowed_servers: [kanban-mcp]
+        allowed_tools: [kanban.*, get_todo_list, manage_todo_list]
+
+  - id: record_pr_metadata
+    type: mcp_tool_call
+    tier: light
+    depends_on: [merge_integrate]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          lifecycle:
+            merge:
+              status: pull_request_opened
+              strategy: pull-request
+              prUrl: "{{ jobs.merge_integrate.output.pr_url }}"
+              prNumber: "{{ jobs.merge_integrate.output.pr_number }}"
+              openedAt: "{{ jobs.merge_integrate.output.opened_at }}"
+              sourceBranch: "{{ jobs.merge_integrate.output.source_branch }}"
+              destinationBranch: "{{ jobs.merge_integrate.output.destination_branch }}"
+      policy: *kanban_mcp_policy
+
+  - id: transition_awaiting_pr_merge
+    type: mcp_tool_call
+    tier: light
+    depends_on: [record_pr_metadata]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        status: awaiting-pr-merge
+        suppressAutomation: true
+      policy: *kanban_mcp_policy
+
+  - id: emit_pr_opened
+    type: emit_event
+    tier: light
+    depends_on: [transition_awaiting_pr_merge]
+    inputs:
+      event_name: WorkItemPullRequestOpenedEvent
+      payload:
+        scopeId: "{{ trigger.scopeId }}"
+        contextId: "{{ trigger.contextId }}"
+        baseBranch: "{{ trigger.resource.executionConfig.baseBranch }}"
+        targetBranch: "{{ trigger.resource.executionConfig.targetBranch }}"
+        prUrl: "{{ jobs.merge_integrate.output.pr_url }}"
+        prNumber: "{{ jobs.merge_integrate.output.pr_number }}"
+
+  - id: record_pr_metadata_remediated
+    type: mcp_tool_call
+    tier: light
+    depends_on: [merge_integrate_after_remediation]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          lifecycle:
+            merge:
+              status: pull_request_opened
+              strategy: pull-request
+              prUrl: "{{ jobs.merge_integrate_after_remediation.output.pr_url }}"
+              prNumber: "{{ jobs.merge_integrate_after_remediation.output.pr_number }}"
+              openedAt: "{{ jobs.merge_integrate_after_remediation.output.opened_at }}"
+              sourceBranch: "{{ jobs.merge_integrate_after_remediation.output.source_branch }}"
+              destinationBranch: "{{ jobs.merge_integrate_after_remediation.output.destination_branch }}"
+              feedback: "{{ jobs.remediate_quality_gate.output.response }}"
+              resolvedByAgent: true
+      policy: *kanban_mcp_policy
+
+  - id: transition_awaiting_pr_merge_remediated
+    type: mcp_tool_call
+    tier: light
+    depends_on: [record_pr_metadata_remediated]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        status: awaiting-pr-merge
+        suppressAutomation: true
+      policy: *kanban_mcp_policy
+
+  - id: emit_pr_opened_remediated
+    type: emit_event
+    tier: light
+    depends_on: [transition_awaiting_pr_merge_remediated]
+    inputs:
+      event_name: WorkItemPullRequestOpenedEvent
+      payload:
+        scopeId: "{{ trigger.scopeId }}"
+        contextId: "{{ trigger.contextId }}"
+        baseBranch: "{{ trigger.resource.executionConfig.baseBranch }}"
+        targetBranch: "{{ trigger.resource.executionConfig.targetBranch }}"
+        prUrl: "{{ jobs.merge_integrate_after_remediation.output.pr_url }}"
+        prNumber: "{{ jobs.merge_integrate_after_remediation.output.pr_number }}"
+
+  - id: transition_done_clean
+    type: mcp_tool_call
+    tier: light
+    depends_on: [record_merge_metadata_clean]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        status: done
+        suppressAutomation: true
+      policy: *kanban_mcp_policy
+
+  - id: emit_merge_completed_clean
+    type: emit_event
+    tier: light
+    depends_on: [transition_done_clean]
+    inputs:
+      event_name: WorkItemMergeCompletedEvent
+      payload:
+        scopeId: "{{ trigger.scopeId }}"
+        contextId: "{{ trigger.contextId }}"
+        baseBranch: "{{ trigger.resource.executionConfig.baseBranch }}"
+        targetBranch: "{{ trigger.resource.executionConfig.targetBranch }}"
+        baseMergeCommit: "{{ jobs.merge_integrate.output.baseMergeCommit }}"
+        mergeCommit: "{{ jobs.merge_integrate.output.mergeCommit }}"
+
+  - id: cleanup_worktree_clean
+    type: git_operation
+    tier: light
+    depends_on: [emit_merge_completed_clean]
+    inputs:
+      action: remove_worktree
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+
+  - id: record_merge_metadata_conflict
+    type: mcp_tool_call
+    tier: light
+    depends_on: [merge_integrate_after_remote]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          lifecycle:
+            merge:
+              status: succeeded
+              sourceBranch: "{{ jobs.merge_integrate_after_remote.output.source_branch }}"
+              destinationBranch: "{{ jobs.merge_integrate_after_remote.output.destination_branch }}"
+              feedback: "{{ jobs.resolve_local_conflicts.output.response }}"
+              remoteResolutionFeedback: "{{ jobs.resolve_remote_conflicts.output.response }}"
+              resolvedByAgent: true
+      policy: *kanban_mcp_policy
+
+  - id: transition_done_conflict
+    type: mcp_tool_call
+    tier: light
+    depends_on: [record_merge_metadata_conflict]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        status: done
+        suppressAutomation: true
+      policy: *kanban_mcp_policy
+
+  - id: emit_merge_completed_conflict
+    type: emit_event
+    tier: light
+    depends_on: [transition_done_conflict]
+    inputs:
+      event_name: WorkItemMergeCompletedEvent
+      payload:
+        scopeId: "{{ trigger.scopeId }}"
+        contextId: "{{ trigger.contextId }}"
+        baseBranch: "{{ trigger.resource.executionConfig.baseBranch }}"
+        targetBranch: "{{ trigger.resource.executionConfig.targetBranch }}"
+        baseMergeCommit: "{{ jobs.merge_integrate_after_remote.output.baseMergeCommit }}"
+        mergeCommit: "{{ jobs.merge_integrate_after_remote.output.mergeCommit }}"
+
+  - id: cleanup_worktree_conflict
+    type: git_operation
+    tier: light
+    depends_on: [emit_merge_completed_conflict]
+    inputs:
+      action: remove_worktree
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+
+  - id: record_merge_metadata_remediated
+    type: mcp_tool_call
+    tier: light
+    depends_on: [merge_integrate_after_remediation]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          lifecycle:
+            merge:
+              status: succeeded
+              sourceBranch: "{{ jobs.merge_integrate_after_remediation.output.source_branch }}"
+              destinationBranch: "{{ jobs.merge_integrate_after_remediation.output.destination_branch }}"
+              feedback: "{{ jobs.remediate_quality_gate.output.response }}"
+              resolvedByAgent: true
+      policy: *kanban_mcp_policy
+
+  - id: transition_done_remediated
+    type: mcp_tool_call
+    tier: light
+    depends_on: [record_merge_metadata_remediated]
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        status: done
+        suppressAutomation: true
+      policy: *kanban_mcp_policy
+
+  - id: emit_merge_completed_remediated
+    type: emit_event
+    tier: light
+    depends_on: [transition_done_remediated]
+    inputs:
+      event_name: WorkItemMergeCompletedEvent
+      payload:
+        scopeId: "{{ trigger.scopeId }}"
+        contextId: "{{ trigger.contextId }}"
+        baseBranch: "{{ trigger.resource.executionConfig.baseBranch }}"
+        targetBranch: "{{ trigger.resource.executionConfig.targetBranch }}"
+        baseMergeCommit: "{{ jobs.merge_integrate_after_remediation.output.baseMergeCommit }}"
+        mergeCommit: "{{ jobs.merge_integrate_after_remediation.output.mergeCommit }}"
+
+  - id: cleanup_worktree_remediated
+    type: git_operation
+    tier: light
+    depends_on: [emit_merge_completed_remediated]
+    inputs:
+      action: remove_worktree
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+
+  - id: emit_merge_failed
+    type: emit_event
+    tier: light
+    inputs:
+      event_name: WorkItemMergeFailedEvent
+      payload:
+        scopeId: "{{ trigger.scopeId }}"
+        contextId: "{{ trigger.contextId }}"
+        baseBranch: "{{ trigger.resource.executionConfig.baseBranch }}"
+        targetBranch: "{{ trigger.resource.executionConfig.targetBranch }}"
+        prepareOutcome: "{{ jobs.merge_prepare.output.merge_outcome }}"
+        qualityGatePassed: "{{ jobs.quality_gate.output.outputs.run_gate.ok }}"
+        preflightOutcome: "{{ jobs.merge_integrate_preflight.output.merge_outcome }}"
+        preflightMergeMessage: "{{ jobs.merge_integrate_preflight.output.merge_message }}"
+        preflightAfterHygieneOutcome: "{{ jobs.merge_integrate_preflight_after_hygiene.output.merge_outcome }}"
+        preflightAfterHygieneMergeMessage: "{{ jobs.merge_integrate_preflight_after_hygiene.output.merge_message }}"
+        preflightAfterRemediationOutcome: "{{ jobs.merge_integrate_preflight_after_remediation.output.merge_outcome }}"
+        preflightAfterRemediationMergeMessage: "{{ jobs.merge_integrate_preflight_after_remediation.output.merge_message }}"
+        preflightAfterRemediationHygieneOutcome: "{{ jobs.merge_integrate_preflight_after_remediation_hygiene.output.merge_outcome }}"
+        preflightAfterRemediationHygieneMergeMessage: "{{ jobs.merge_integrate_preflight_after_remediation_hygiene.output.merge_message }}"
+        integrateOutcome: "{{ jobs.merge_integrate.output.merge_outcome }}"
+        mergeMessage: "{{ jobs.merge_integrate.output.merge_message }}"
+        remediationIntegrateOutcome: "{{ jobs.merge_integrate_after_remediation.output.merge_outcome }}"
+        remediationMergeMessage: "{{ jobs.merge_integrate_after_remediation.output.merge_message }}"
+        remediationIntegrateAuthErrorClass: "{{ jobs.merge_integrate_after_remediation.output.auth_error_class }}"
+        remoteIntegrateOutcome: "{{ jobs.merge_integrate_after_remote.output.merge_outcome }}"
+        remoteMergeMessage: "{{ jobs.merge_integrate_after_remote.output.merge_message }}"
+        remoteIntegrateAuthErrorClass: "{{ jobs.merge_integrate_after_remote.output.auth_error_class }}"
+        authErrorClass: "{{ jobs.merge_prepare.output.auth_error_class }}"
+        integrateAuthErrorClass: "{{ jobs.merge_integrate.output.auth_error_class }}"
+        dirtyPaths: "{{ jobs.merge_integrate_preflight.output.dirty_paths }}"
+        dirtyPathsAfterHygiene: "{{ jobs.merge_integrate_preflight_after_hygiene.output.dirty_paths }}"
+        dirtyPathsAfterRemediation: "{{ jobs.merge_integrate_preflight_after_remediation.output.dirty_paths }}"
+        dirtyPathsAfterRemediationHygiene: "{{ jobs.merge_integrate_preflight_after_remediation_hygiene.output.dirty_paths }}"
+        restoredPaths: "{{ jobs.reconcile_shared_clone_deterministic.output.restored_paths }}"
+        quarantinedPaths: "{{ jobs.reconcile_shared_clone_deterministic.output.quarantined_paths }}"
+        dirtyPathsAfterDeterministic: "{{ jobs.reconcile_shared_clone_deterministic.output.dirty_paths }}"
+        sharedClonePath: "{{ jobs.merge_integrate_preflight.output.shared_clone_path }}"
+
+  - id: terminate_failed_merge
+    type: execution
+    tier: light
+    depends_on: [emit_merge_failed]
+    steps:
+      - id: fail_workflow
+        type: run_command
+        command: "echo 'Merge workflow failed after bounded resolution path'"
+        transitions:
+          - condition: "true"
+            next: fail_job

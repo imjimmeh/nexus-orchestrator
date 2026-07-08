@@ -1,0 +1,62 @@
+# Dependencies (reinstalled in Docker)
+node_modules
+
+# Build outputs
+**/dist
+
+# Incremental build caches (stale caches break `nest build` emit inside Docker)
+**/*.tsbuildinfo
+
+# Test files
+**/*.spec.ts
+**/*.spec.tsx
+**/test/
+**/e2e/
+**/__tests__/
+**/test-results/
+**/playwright-report/
+**/.tmp-*.log
+e2e-test-*.mjs
+e2e-test-*.log
+
+# Git
+.git
+.gitignore
+
+# Docker
+docker-compose.yaml
+docker/
+Dockerfile*
+# ...but the heavy image's entrypoint script must ship in the build context.
+!docker/heavy-entrypoint.sh
+
+# Data / runtime artifacts
+data/
+.worktrees/
+worktree/
+branch/
+locking/
+path/
+git-command/
+
+# IDE / tooling
+.claude/
+.env
+.env.example
+.vscode/
+
+# Docs / non-essential
+docs/
+*.md
+scripts/
+repomix-output.txt
+eslint.config.mjs
+
+# Seed assets are runtime inputs and must be available in built images.
+!seed/**/*.md
+!seed/**/*.yaml
+!seed/**/*.yml
+!seed/**/*.json
+
+# Misc
+GcodeAInexus-orchestator/

@@ -1,0 +1,356 @@
+workflow_id: project_discovery_ceo
+name: Project Discovery (CEO)
+description: |
+  Starts CEO-driven project discovery and spec authoring when orchestration is started for a project.
+trigger:
+  type: event
+  name: ProjectOrchestrationStartedEvent
+  condition: "{{#if (eq trigger.previousOrchestrationStatus 'orchestrating')}}false{{else}}true{{/if}}"
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: ask_user_questions
+      - effect: allow
+        tool: get_capabilities
+      - effect: allow
+        tool: get_agent_profiles
+      - effect: allow
+        tool: kanban.get_charter
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.orchestration_timeline
+      - effect: allow
+        tool: kanban.orchestration_activity
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: invoke_workflow
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+jobs:
+  - id: kickoff_clarification
+    type: execution
+    tier: heavy
+    condition: "{{#if (eq trigger.selectedRoute 'kickoff-clarification')}}true{{else}}false{{/if}}"
+    output_contract:
+      required:
+        - kickoff_summary
+        - clarified_goals
+        - open_questions
+      types:
+        kickoff_summary: string
+        clarified_goals: array
+        open_questions: array
+    inputs:
+      agent_profile: ceo-agent
+      goals: "{{ trigger.goals }}"
+      kickoffContext: "{{ trigger.kickoffContext }}"
+      maxQuestions: 3
+      focusAreas:
+        - scope
+        - success_criteria
+        - constraints
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: ask_user_questions
+          - effect: allow
+            tool: get_capabilities
+          - effect: allow
+            tool: get_agent_profiles
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.get_charter
+          - effect: allow
+            tool: kanban.orchestration_timeline
+          - effect: allow
+            tool: kanban.orchestration_activity
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: invoke_agent_workflow
+    steps:
+      - id: kickoff
+        prompt_file: prompts/project-discovery-ceo/kickoff.md
+  - id: investigate_imported_repo
+    type: invoke_workflow
+    tier: heavy
+    condition: "{{#if (eq trigger.selectedRoute 'imported-repo-bootstrap')}}true{{else}}false{{/if}}"
+    workflow_id: project_codebase_deep_investigation
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      goals: "{{ trigger.goals }}"
+      sourceContext: "{{ trigger.sourceContext }}"
+      readinessContext: "{{ trigger.readinessContext }}"
+      repositoryUrl: "{{ trigger.repositoryUrl }}"
+      resolvedRepoPath: "{{ trigger.basePath }}"
+  - id: reconcile_import_specs
+    type: invoke_workflow
+    tier: heavy
+    depends_on:
+      - investigate_imported_repo
+    condition: "{{#if (or (eq trigger.selectedRoute 'imported-repo-bootstrap') (eq trigger.selectedRoute 'imported-repo-synthesis-and-hydration'))}}true{{else}}false{{/if}}"
+    workflow_id: project_spec_revision_ceo
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      goals: "{{ trigger.goals }}"
+      feedback: "Imported repository reconciliation required. Repository: {{ trigger.repositoryUrl }} (path: {{ trigger.basePath }}). Scope: {{ trigger.scopeId }}. Reconcile existing specs against discovered codebase state, identify gaps, and update PRD/SDD to reflect actual implementation status."
+      basePath: "{{ trigger.basePath }}"
+      repositoryUrl: "{{ trigger.repositoryUrl }}"
+      selectedRoute: "{{ trigger.selectedRoute }}"
+      selectedRuleId: "{{ trigger.selectedRuleId }}"
+      investigationArtifactPaths: "{{ jobs.investigate_imported_repo.output.childStateVariables.jobs.finalize_investigation_artifacts.output.probe_artifact_paths }}"
+      investigationSummaryPath: "{{ jobs.investigate_imported_repo.output.childStateVariables.jobs.finalize_investigation_artifacts.output.investigation_summary_path }}"
+      investigationCommitSha: "{{ jobs.investigate_imported_repo.output.childStateVariables.jobs.commit_investigation_artifacts.output.commit_sha }}"
+  - id: synthesize_and_hydrate_import
+    type: invoke_workflow
+    tier: heavy
+    depends_on:
+      - reconcile_import_specs
+    condition: "{{#if (or (eq trigger.selectedRoute 'imported-repo-bootstrap') (eq trigger.selectedRoute 'imported-repo-synthesis-and-hydration'))}}true{{else}}false{{/if}}"
+    workflow_id: imported_repo_synthesis_and_hydration
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      goals: "{{ trigger.goals }}"
+      sourceContext: "{{ trigger.sourceContext }}"
+      readinessContext: "{{ trigger.readinessContext }}"
+      basePath: "{{ trigger.basePath }}"
+      repositoryUrl: "{{ trigger.repositoryUrl }}"
+      orchestrationMode: "{{ trigger.orchestrationMode }}"
+      humanDecisionPolicy: "{{ trigger.humanDecisionPolicy }}"
+      investigationArtifactPaths: "{{ jobs.investigate_imported_repo.output.childStateVariables.jobs.finalize_investigation_artifacts.output.probe_artifact_paths }}"
+      investigationSummaryPath: "{{ jobs.investigate_imported_repo.output.childStateVariables.jobs.finalize_investigation_artifacts.output.investigation_summary_path }}"
+      investigationCommitSha: "{{ jobs.investigate_imported_repo.output.childStateVariables.jobs.commit_investigation_artifacts.output.commit_sha }}"
+  - id: resolve_imported_repo_findings
+    type: execution
+    tier: heavy
+    depends_on:
+      - synthesize_and_hydrate_import
+    condition: "{{#if (and (or (eq trigger.selectedRoute 'imported-repo-bootstrap') (eq trigger.selectedRoute 'imported-repo-synthesis-and-hydration')) (eq jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.findings_ready_for_resolution true))}}true{{else}}false{{/if}}"
+    output_contract:
+      required:
+        - findings_resolved
+        - ready_for_cycle
+    inputs:
+      agent_profile: ceo-agent
+      scope_id: "{{ trigger.scopeId }}"
+      goals: "{{ trigger.goals }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.imported_repository_findings
+          - effect: allow
+            tool: kanban.resolve_imported_repository_finding
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: ask_user_questions
+          - effect: deny
+            tool: invoke_agent_workflow
+          - effect: deny
+            tool: invoke_workflow
+    steps:
+      - id: resolve_findings
+        prompt: |
+          Resolve imported repository findings for this project.
+
+          1. Call kanban.imported_repository_findings with project_id set to `{{ trigger.scopeId }}` and statuses ["pending_investigation", "ready_for_work_item"].
+          2. For each finding:
+             a. If finding.recommendedStatus is "todo" and finding.findingKind is "gap": resolve with disposition "create_work_item" and rationale from the finding reason.
+             b. If finding.findingKind is "existing_capability": resolve with disposition "resolved_existing" and rationale "High-confidence existing capability confirmed during reconciliation".
+             c. If finding finding requires human input: resolve with disposition "needs_human" and rationale from the finding reason.
+             d. Otherwise: resolve with disposition "suppress" and rationale "Low-priority finding deferred".
+          3. Count findings_examined, findings_resolved (created work items), findings_needing_human, work_items_created.
+          4. Set job output:
+             - findings_resolved: true when all findings processed
+             - ready_for_cycle: true when findings_needing_human is 0, false otherwise
+             - findings_examined, findings_resolved, findings_needing_human, work_items_created counts
+  - id: discovery_and_specs
+    type: execution
+    tier: heavy
+    depends_on:
+      - kickoff_clarification
+      - investigate_imported_repo
+      - reconcile_import_specs
+      - synthesize_and_hydrate_import
+      - resolve_imported_repo_findings
+    output_contract:
+      required:
+        - decision
+        - specs_ready
+      types:
+        decision: string
+        specs_ready: boolean
+    inputs:
+      agent_profile: ceo-agent
+      goals: "{{ trigger.goals }}"
+      state_summary: "{{ trigger.stateSummary }}"
+      is_restart: "{{ trigger.isRestart }}"
+      selected_playbook: "{{ trigger.selectedRoute }}"
+      selected_rule_id: "{{ trigger.selectedRuleId }}"
+      kickoff_summary: "{{ jobs.kickoff_clarification.output.kickoff_summary }}"
+      clarified_goals: "{{ jobs.kickoff_clarification.output.clarified_goals }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: get_capabilities
+          - effect: allow
+            tool: get_agent_profiles
+          - effect: allow
+            tool: kanban.get_charter
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.orchestration_timeline
+          - effect: allow
+            tool: kanban.orchestration_activity
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: ask_user_questions
+          - effect: deny
+            tool: invoke_agent_workflow
+    steps:
+      - id: discovery
+        prompt_file: prompts/project-discovery-ceo/discovery.md
+  - id: record_import_hydration_blocked
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - discovery_and_specs
+    condition: "{{#if (and (or (eq trigger.selectedRoute 'imported-repo-bootstrap') (eq trigger.selectedRoute 'imported-repo-synthesis-and-hydration')) (eq jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.ready_for_cycle false))}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.orchestration_record_blocked
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        blocked_stage: imported_repo_hydration
+        blocked_reason: "{{ jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.hydration_summary.reason }}"
+        ready_for_cycle: false
+        child_run_id: "{{ jobs.synthesize_and_hydrate_import.output.childRunId }}"
+        hydration_summary: "{{json jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.hydration_summary}}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+  - id: emit_import_hydration_blocked
+    type: emit_event
+    tier: light
+    depends_on:
+      - discovery_and_specs
+    condition: "{{#if (and (or (eq trigger.selectedRoute 'imported-repo-bootstrap') (eq trigger.selectedRoute 'imported-repo-synthesis-and-hydration')) (eq jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.ready_for_cycle false))}}true{{else}}false{{/if}}"
+    inputs:
+      event_name: ProjectOrchestrationImportHydrationBlockedEvent
+      payload:
+        event: ProjectOrchestrationImportHydrationBlockedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        stage: imported_repo_hydration
+        reason: "{{ jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.hydration_summary.reason }}"
+        ready_for_cycle: false
+        childRunId: "{{ jobs.synthesize_and_hydrate_import.output.childRunId }}"
+  - id: clear_import_hydration_blocked
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - discovery_and_specs
+    condition: "{{#if (and (or (eq trigger.selectedRoute 'imported-repo-bootstrap') (eq trigger.selectedRoute 'imported-repo-synthesis-and-hydration')) (eq jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.ready_for_cycle true))}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.orchestration_clear_blocked
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        cleared_stage: imported_repo_hydration
+        ready_for_cycle: true
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+  - id: emit_specs_ready
+    type: emit_event
+    tier: light
+    depends_on:
+      - discovery_and_specs
+      - clear_import_hydration_blocked
+    condition: "{{#if (or (and (or (eq trigger.selectedRoute 'imported-repo-bootstrap') (eq trigger.selectedRoute 'imported-repo-synthesis-and-hydration')) (eq jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.ready_for_cycle true)) (eq jobs.discovery_and_specs.output.specs_ready true))}}true{{else}}false{{/if}}"
+    inputs:
+      event_name: ProjectOrchestrationSpecsReadyEvent
+      payload:
+        event: ProjectOrchestrationSpecsReadyEvent
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+  - id: emit_cycle_request
+    type: emit_event
+    tier: light
+    depends_on:
+      - emit_specs_ready
+    condition: "{{#if (or (and (or (eq trigger.selectedRoute 'imported-repo-bootstrap') (eq trigger.selectedRoute 'imported-repo-synthesis-and-hydration')) (eq jobs.synthesize_and_hydrate_import.output.childStateVariables.jobs.hydrate_discovery_results.output.ready_for_cycle true)) (eq jobs.discovery_and_specs.output.specs_ready true))}}true{{else}}false{{/if}}"
+    inputs:
+      event_name: ProjectOrchestrationCycleRequestedEvent
+      payload:
+        event: ProjectOrchestrationCycleRequestedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        goals: "{{ trigger.goals }}"
+        contextId: __orchestration_lifecycle__
+        source: specs_ready
+        reason: Discovery workflow completed, specifications are ready
+        isRestart: "{{ trigger.isRestart }}"
+        stateSummary: "{{ trigger.stateSummary }}"
+        basePath: "{{ trigger.basePath }}"
+        repositoryUrl: "{{ trigger.repositoryUrl }}"

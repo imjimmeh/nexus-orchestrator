@@ -1,0 +1,18 @@
+{
+  "name": "git_verifier",
+  "description": "Verifies all files in the worktree are committed. Commits any remaining changes before the workflow proceeds.",
+  "tier_preference": "light",
+  "supports_vision": false,
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow bash *",
+      "allow set_job_output *",
+      "allow search_skills *"
+    ]
+  },
+  "assigned_skills": [
+    "git-commit-enforcement"
+  ],
+  "is_active": true
+}

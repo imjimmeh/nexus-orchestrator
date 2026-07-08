@@ -1,0 +1,29 @@
+# Build artefacts
+dist/
+build/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# Coverage / cache
+coverage/
+.nyc_output/
+*.lcov
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Vitest cache
+.vitest-cache/
+apps/api/storage/

@@ -1,0 +1,20 @@
+{
+  "name": "acp-command-executor",
+  "tier_preference": "light",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow bash *",
+      "allow read *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *"
+    ]
+  },
+  "assigned_skills": [],
+  "is_active": true
+}

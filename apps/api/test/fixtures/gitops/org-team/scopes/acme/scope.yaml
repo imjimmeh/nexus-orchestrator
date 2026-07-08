@@ -1,0 +1,6 @@
+apiVersion: nexus.gitops/v1
+kind: ScopeNode
+type: org
+name: Acme
+slug: acme
+metadata: null

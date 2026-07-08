@@ -1,0 +1,104 @@
+# Stage 1: Build
+FROM node:24 AS builder
+
+WORKDIR /build
+
+COPY packages/core ./packages/core
+COPY packages/harness-runtime ./packages/harness-runtime
+COPY packages/harness-engine-claude-code ./packages/harness-engine-claude-code
+COPY package.json package-lock.json turbo.json ./
+
+RUN npm install --ignore-scripts
+# Build harness-runtime, harness-engine-claude-code and their workspace dependencies in topological order.
+RUN npx turbo run build --filter=@nexus/harness-engine-claude-code
+
+# Stage 2: Run
+FROM node:24
+
+WORKDIR /app
+
+# apt 2.6.1 in node:24 mis-splits clearsigned InRelease files, causing GPG
+# verification to fail even though the keys are valid (gpgv verifies fine).
+# Bypass apt's broken verification layer; packages still come from the
+# official deb.debian.org mirror.
+RUN apt-get clean \
+    && apt-get update -o Acquire::AllowInsecureRepositories=true \
+    && apt-get install -y --allow-unauthenticated --no-install-recommends \
+        git \
+        curl \
+        jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep downloaded .deb packages so a mounted /var/cache/apt/archives volume
+# caches runtime apt installs across containers.
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# Install mise (declarative toolchain manager) so composite images built FROM
+# this image can `mise use -g <tool>@<version>` to add languages on demand.
+RUN curl -fsSL https://mise.run | sh \
+    && ln -s /root/.local/bin/mise /usr/local/bin/mise
+ENV MISE_DATA_DIR=/root/.local/share/mise
+ENV PATH="/root/.local/share/mise/shims:/usr/local/bin:${PATH}"
+
+# Copy root manifest
+COPY package.json package-lock.json ./
+
+# Copy package manifests
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/harness-runtime/package.json ./packages/harness-runtime/package.json
+COPY packages/harness-engine-claude-code/package.json ./packages/harness-engine-claude-code/package.json
+
+# Copy built artifacts from builder
+COPY --from=builder /build/packages/core/dist ./packages/core/dist
+COPY --from=builder /build/packages/harness-runtime/dist ./packages/harness-runtime/dist
+COPY --from=builder /build/packages/harness-engine-claude-code/dist ./packages/harness-engine-claude-code/dist
+
+# Install production dependencies (claude-agent-sdk bundles the CLI binary)
+RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts
+
+# Create required directories (mirrors light/heavy conventions)
+RUN mkdir -p /opt/harness-runtime/agent /app/.claude/agent /app/extensions /workspace
+
+# Set environment defaults
+ENV NODE_ENV=production
+ENV WEBSOCKET_URL=http://host.docker.internal:3001
+ENV WORKSPACE_PATH=/workspace
+ENV HARNESS_ID=claude-code
+ENV DISABLE_AUTOUPDATER=1
+# Empty placeholder; overridden at container startup by the entrypoint when unset.
+ENV CLAUDE_CODE_BIN=""
+
+# Entrypoint resolves the Claude Code CLI binary path at container startup (not build
+# time) so the correct path survives SDK updates and layer rebuilds.
+#
+# Built with `printf '%s\n' 'line'...` (single-quoted args) rather than a heredoc so
+# the script always has LF line endings even when this Dockerfile is checked out with
+# CRLF line endings on Windows. A heredoc body would otherwise embed CR bytes into the
+# `#!/bin/sh` shebang and the container would fail to start with `exec format error`.
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    '# Resolve the Claude Code CLI binary at startup (not build time, to survive SDK updates).' \
+    '# The executable ships in the platform-specific subpackage (claude-agent-sdk-linux-x64),' \
+    '# NOT the main @anthropic-ai/claude-agent-sdk package, which npm hoists elsewhere.' \
+    '# Prefer the glibc build (this image is Debian/node:24); fall back to musl, then a broad scan.' \
+    'if [ -z "$CLAUDE_CODE_BIN" ]; then' \
+    '  for c in /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl/claude; do' \
+    '    if [ -x "$c" ]; then CLAUDE_CODE_BIN="$c"; break; fi' \
+    '  done' \
+    '  if [ -z "$CLAUDE_CODE_BIN" ]; then' \
+    '    CLAUDE_CODE_BIN=$(find /app/node_modules/@anthropic-ai -name "claude" -type f 2>/dev/null | head -1)' \
+    '  fi' \
+    '  if [ -z "$CLAUDE_CODE_BIN" ]; then' \
+    '    echo "WARNING: claude binary not found in @anthropic-ai SDK packages" >&2' \
+    '  fi' \
+    '  export CLAUDE_CODE_BIN' \
+    'fi' \
+    'exec node /app/packages/harness-runtime/dist/main.js' \
+    > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
+EXPOSE 8374
+WORKDIR /workspace
+
+ENTRYPOINT ["/app/entrypoint.sh"]

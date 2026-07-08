@@ -1,0 +1,115 @@
+workflow_id: project_charter_ceo
+name: Project Charter — Conversational Onboarding
+description: >
+  CEO-driven conversational onboarding. Elicits and persists structured project
+  intent (goals, requirements, constraints, dos/donts, non-goals, decisions) as
+  goals + project memories + docs/project-context/CHARTER.md. Greenfield and
+  brownfield branches; re-runnable mid-project to refine.
+
+trigger:
+  type: manual
+  inputs:
+    - name: scopeId
+      type: string
+      required: true
+    - name: mode
+      type: string
+      required: false
+    - name: goals
+      type: string
+      required: false
+    - name: selectedRoute
+      type: string
+      required: false
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ask_user_questions
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: kanban.get_charter
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.goals
+      - effect: allow
+        tool: kanban.goal_create
+      - effect: allow
+        tool: kanban.goal_update
+      - effect: allow
+        tool: kanban.goal_update_status
+      - effect: allow
+        tool: kanban.goal_add_note
+      - effect: allow
+        tool: kanban.record_project_memory
+      - effect: allow
+        tool: kanban.update_charter
+      - effect: allow
+        tool: delegate_imported_repo_discovery
+      - effect: allow
+        tool: delegate_design_ingestion
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: capture_charter
+    type: execution
+    tier: heavy
+    condition: '{{#if (not (or (eq trigger.mode "refine") (eq trigger.mode "brownfield") (eq trigger.selectedRoute "imported-repo") (eq trigger.selectedRoute "brownfield")))}}true{{else}}false{{/if}}'
+    max_step_loops: 30
+    output_contract:
+      required:
+        - charter_complete
+    inputs:
+      agent_profile: ceo-agent
+      scopeId: "{{ trigger.context.scopeId }}"
+      goals: "{{ trigger.goals }}"
+      mode: "{{ trigger.mode }}"
+    steps:
+      - id: onboard
+        prompt_file: prompts/project-charter-ceo/onboard.md
+
+  - id: capture_charter_brownfield
+    type: execution
+    tier: heavy
+    condition: '{{#if (or (eq trigger.mode "brownfield") (eq trigger.selectedRoute "imported-repo") (eq trigger.selectedRoute "brownfield"))}}true{{else}}false{{/if}}'
+    max_step_loops: 30
+    output_contract:
+      required:
+        - charter_complete
+    inputs:
+      agent_profile: ceo-agent
+      scopeId: "{{ trigger.context.scopeId }}"
+      goals: "{{ trigger.goals }}"
+      mode: "{{ trigger.mode }}"
+    steps:
+      - id: onboard
+        prompt_file: prompts/project-charter-ceo/brownfield-onboard.md
+
+  - id: refine_charter
+    type: execution
+    tier: heavy
+    condition: '{{#if (eq trigger.mode "refine")}}true{{else}}false{{/if}}'
+    max_step_loops: 30
+    output_contract:
+      required:
+        - charter_updated
+    inputs:
+      agent_profile: ceo-agent
+      scopeId: "{{ trigger.context.scopeId }}"
+      mode: "{{ trigger.mode }}"
+    steps:
+      - id: refine
+        prompt_file: prompts/project-charter-ceo/refine.md

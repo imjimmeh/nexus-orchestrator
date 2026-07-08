@@ -1,0 +1,22 @@
+{
+  "name": "technical_architect_ingestion",
+  "description": "Creates Solution Design Documents from PRDs and design analysis findings.",
+  "tier_preference": "heavy",
+  "supports_vision": false,
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow read_document *",
+      "allow create_artifact *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow read_skill_manifest *"
+    ]
+  },
+  "assigned_skills": [
+    "sdd-authoring",
+    "architecture-design"
+  ],
+  "is_active": true
+}

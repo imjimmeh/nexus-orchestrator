@@ -1,0 +1,31 @@
+{
+  "name": "@nexus/harness-engine-pi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "lint": "eslint . --config ../../eslint.config.mjs --fix",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "cross-env vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.78.0",
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@nexus/core": "*",
+    "@nexus/harness-runtime": "*",
+    "ajv": "^8.20.0",
+    "playwright": "^1.60.0",
+    "socket.io-client": "^4.8.3",
+    "undici": "^7.27.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "cross-env": "^10.1.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

@@ -1,0 +1,318 @@
+{
+  "name": "ceo-agent",
+  "tier_preference": "heavy",
+  "model_name": null,
+  "provider_name": null,
+  "assigned_skills": [
+    "project-analysis",
+    "decision-records",
+    "orchestration-patterns",
+    "orchestrator-steering"
+  ],
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      {
+        "effect": "allow",
+        "tool": "invoke_agent_workflow"
+      },
+      {
+        "effect": "allow",
+        "tool": "await_agent_workflow"
+      },
+      {
+        "effect": "allow",
+        "tool": "list_running_workflows"
+      },
+      {
+        "effect": "deny",
+        "tool": "kanban.orchestration_record_cycle_decision"
+      },
+      {
+        "effect": "allow",
+        "tool": "read"
+      },
+      {
+        "effect": "allow",
+        "tool": "write"
+      },
+      {
+        "effect": "allow",
+        "tool": "query_memory"
+      },
+      {
+        "effect": "allow",
+        "tool": "list_pending_learning_candidates"
+      },
+      {
+        "effect": "allow",
+        "tool": "promote_learning_candidate"
+      },
+      {
+        "effect": "allow",
+        "tool": "reject_learning_candidate"
+      },
+      {
+        "effect": "allow",
+        "tool": "create_skill_proposal"
+      },
+      {
+        "effect": "allow",
+        "tool": "suggest_skill_assignment"
+      },
+      {
+        "effect": "allow",
+        "tool": "step_complete"
+      },
+      {
+        "effect": "allow",
+        "tool": "open_war_room"
+      },
+      {
+        "effect": "allow",
+        "tool": "invite_war_room_participant"
+      },
+      {
+        "effect": "allow",
+        "tool": "post_war_room_message"
+      },
+      {
+        "effect": "allow",
+        "tool": "update_war_room_blackboard"
+      },
+      {
+        "effect": "allow",
+        "tool": "submit_war_room_signoff"
+      },
+      {
+        "effect": "allow",
+        "tool": "get_war_room_state"
+      },
+      {
+        "effect": "allow",
+        "tool": "close_war_room"
+      },
+      {
+        "effect": "allow",
+        "tool": "spawn_subagent_async"
+      },
+      {
+        "effect": "allow",
+        "tool": "wait_for_subagents"
+      },
+      {
+        "effect": "allow",
+        "tool": "check_subagent_status"
+      },
+      {
+        "effect": "allow",
+        "tool": "get_capabilities"
+      },
+      {
+        "effect": "allow",
+        "tool": "get_agent_profiles"
+      },
+      {
+        "effect": "allow",
+        "tool": "create_agent_profile"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.reconcile_imported_repository_backlog"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.imported_repository_findings"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.resolve_imported_repository_finding"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.publish_specs"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.work_item_subtask_validate_blueprint"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.complete_orchestration_cycle_decision"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.orchestration_complete"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.reset_orchestration_intents"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.record_strategic_intent"
+      },
+      {
+        "effect": "allow",
+        "tool": "set_job_output"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_goal_backlog_planning"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_imported_repo_discovery"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_orchestration_refinement"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_orchestration_advisor"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_work_item_generation"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_spec_revision"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_roadmap_planning"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_ui_ux_testing"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_web_research"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_rediscovery"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.goal_create"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.goal_update"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.goal_update_status"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.goal_add_note"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.record_project_memory"
+      },
+      {
+        "effect": "allow",
+        "tool": "delegate_design_ingestion"
+      },
+      {
+        "effect": "allow",
+        "tool": "ask_user_questions"
+      },
+      {
+        "effect": "allow",
+        "tool": "steer_project"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.get_charter"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.project_state"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.list_work_items"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.work_item"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.work_item_create"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.work_item_update"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.work_item_transition_status"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.work_item_subtask_upsert"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.orchestration_timeline"
+      },
+      {
+        "effect": "allow",
+        "tool": "kanban.orchestration_activity"
+      },
+      {
+        "effect": "allow",
+        "tool": "search_workflows"
+      },
+      {
+        "effect": "allow",
+        "tool": "read_workflow_summary"
+      },
+      {
+        "effect": "allow",
+        "tool": "search_skills"
+      },
+      {
+        "effect": "allow",
+        "tool": "read_skill_manifest"
+      },
+      {
+        "effect": "allow",
+        "tool": "search_playbooks"
+      },
+      {
+        "effect": "allow",
+        "tool": "read_playbook"
+      },
+      {
+        "effect": "allow",
+        "tool": "ls"
+      },
+      {
+        "effect": "allow",
+        "tool": "get_todo_list"
+      },
+      {
+        "effect": "allow",
+        "tool": "manage_todo_list"
+      },
+      {
+        "effect": "allow",
+        "tool": "find"
+      },
+      {
+        "effect": "allow",
+        "tool": "grep"
+      }
+    ]
+  },
+  "is_active": true
+}

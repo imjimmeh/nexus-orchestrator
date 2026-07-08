@@ -1,0 +1,102 @@
+# Stage 1: Build
+FROM node:24 AS builder
+
+WORKDIR /build
+
+COPY packages/core ./packages/core
+COPY packages/harness-runtime ./packages/harness-runtime
+COPY packages/harness-engine-pi ./packages/harness-engine-pi
+COPY package.json package-lock.json turbo.json ./
+
+RUN npm install --ignore-scripts
+# Build harness-runtime, harness-engine-pi and their workspace dependencies in topological order.
+RUN npx turbo run build --filter=@nexus/harness-engine-pi
+
+# Stage 2: Run
+FROM node:24
+
+WORKDIR /app
+
+# apt 2.6.1 in node:24 mis-splits clearsigned InRelease files, causing GPG
+# verification to fail even though the keys are valid (gpgv verifies fine).
+# Bypass apt's broken verification layer; packages still come from the
+# official deb.debian.org mirror.
+RUN apt-get clean \
+    && apt-get update -o Acquire::AllowInsecureRepositories=true \
+    && apt-get install -y --allow-unauthenticated --no-install-recommends \
+        git \
+        make \
+        gcc \
+        g++ \
+        python3 \
+        python3-pip \
+        jq \
+        curl \
+        fd-find \
+        ripgrep \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Keep downloaded .deb packages so a mounted /var/cache/apt/archives volume
+# caches runtime apt installs across containers.
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+
+# Install mise (declarative toolchain manager) so composite images built FROM
+# this image can `mise use -g <tool>@<version>` to add languages on demand.
+RUN curl -fsSL https://mise.run | sh \
+    && ln -s /root/.local/bin/mise /usr/local/bin/mise
+ENV MISE_DATA_DIR=/root/.local/share/mise
+ENV PATH="/root/.local/share/mise/shims:/usr/local/bin:${PATH}"
+
+# Install Playwright browsers and dependencies
+RUN npx playwright install chromium && \
+    npx playwright install-deps chromium
+
+# Copy root manifest
+COPY package.json package-lock.json ./
+
+# Copy packages manifests
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/harness-runtime/package.json ./packages/harness-runtime/package.json
+COPY packages/harness-engine-pi/package.json ./packages/harness-engine-pi/package.json
+
+# Vendored SDK patches (applied explicitly below — npm postinstall is skipped by --ignore-scripts)
+COPY patches ./patches
+
+# Copy built artifacts from builder
+COPY --from=builder /build/packages/core/dist ./packages/core/dist
+COPY --from=builder /build/packages/harness-runtime/dist ./packages/harness-runtime/dist
+COPY --from=builder /build/packages/harness-engine-pi/dist ./packages/harness-engine-pi/dist
+
+# Install workspace dependencies, including dev tools used by verification agents.
+# The --include=dev flag ensures vitest, eslint, and other dev tooling are available
+# even though NODE_ENV is set to production. This enables subagents to run tests
+# and lint verification commands inside heavy containers.
+RUN npm install --include=dev --no-audit --no-fund --ignore-scripts
+
+# Apply vendored pi SDK patches (earendil-works/pi#5463, #5445). --ignore-scripts
+# above skips the postinstall hook, so run patch-package explicitly.
+RUN npx patch-package
+
+# Create required directories
+RUN mkdir -p /opt/harness-runtime/agent /app/.pi/agent /app/extensions /workspace
+
+# Runtime workspaces are bind-mounted at /workspace. The entrypoint exposes the
+# image-baked node_modules there, but self-heals when the mounted workspace's
+# lockfile has drifted from the image (a dependency added after the image build)
+# so the quality gate never runs against stale deps. See docker/heavy-entrypoint.sh.
+COPY docker/heavy-entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Set environment defaults
+ENV NODE_ENV=production
+ENV WEBSOCKET_URL=http://host.docker.internal:3001
+ENV WORKSPACE_PATH=/workspace
+ENV HARNESS_ID=pi
+
+EXPOSE 8374
+WORKDIR /workspace
+
+# Run from the root to ensure proper workspace resolution
+ENTRYPOINT ["/app/entrypoint.sh"]

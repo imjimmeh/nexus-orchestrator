@@ -1,0 +1,79 @@
+workflow_id: pre_merge_ci
+name: Pre-Merge CI
+description: >
+  Blocks transition to Ready-to-Merge until linting and unit tests pass.
+  Runs as a lifecycle gate before the ready-to-merge column transition.
+
+trigger:
+  type: lifecycle
+  phase: ready-to-merge
+  hook: before
+  blocking: true
+
+permissions:
+  allow_tools: [bash, read]
+  deny_tools: []
+
+jobs:
+  - id: build_core
+    type: run_command
+    tier: light
+    inputs:
+      command: npm run build --workspace=packages/core
+      working_dir: "{{ trigger.payload.workspace }}"
+
+  - id: lint_api
+    type: run_command
+    tier: light
+    depends_on: [build_core]
+    inputs:
+      command: npm run lint:api
+      working_dir: "{{ trigger.payload.workspace }}"
+
+  - id: lint_kanban
+    type: run_command
+    tier: light
+    depends_on: [build_core]
+    inputs:
+      command: npm run lint:kanban
+      working_dir: "{{ trigger.payload.workspace }}"
+
+  - id: lint_packages
+    type: run_command
+    tier: light
+    depends_on: [build_core]
+    inputs:
+      command: npm run lint:packages
+      working_dir: "{{ trigger.payload.workspace }}"
+
+  - id: lint_web
+    type: run_command
+    tier: light
+    depends_on: [build_core]
+    inputs:
+      command: npm run lint:web
+      working_dir: "{{ trigger.payload.workspace }}"
+
+  - id: test_api
+    type: run_command
+    tier: heavy
+    depends_on: [lint_api]
+    inputs:
+      command: npm run test:api
+      working_dir: "{{ trigger.payload.workspace }}"
+
+  - id: test_kanban
+    type: run_command
+    tier: heavy
+    depends_on: [lint_kanban]
+    inputs:
+      command: npm run test:kanban
+      working_dir: "{{ trigger.payload.workspace }}"
+
+  - id: test_web
+    type: run_command
+    tier: heavy
+    depends_on: [lint_web]
+    inputs:
+      command: npm run test:unit:web
+      working_dir: "{{ trigger.payload.workspace }}"

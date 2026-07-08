@@ -1,0 +1,34 @@
+{
+  "scopeType": "agent_profile",
+  "scopeId": "investigation-subagent",
+  "toolName": "bash",
+  "rules": [
+    {
+      "effect": "deny",
+      "priority": 300,
+      "argumentPatterns": [
+        {
+          "path": "command",
+          "operator": "regex",
+          "value": "(^|\\s)(rm|mv|cp|touch|mkdir|rmdir|chmod|chown|git|npm|pnpm|yarn|docker|curl|wget|python|node|perl|ssh|ps|kill|tee)(\\s|$)|[>;`]|\\$\\(|\\|\\||&&|\\||\\bfind\\b.*\\s-(delete|exec|execdir|ok|okdir)\\b|\\bsed\\b.*(\\s-i\\b|(^|[\\s;])[0-9,$!{}\\s]*[we]\\b)"
+        }
+      ]
+    },
+    {
+      "effect": "allow",
+      "priority": 200,
+      "argumentPatterns": [
+        {
+          "path": "command",
+          "operator": "regex",
+          "value": "^\\s*(ls|find|grep|rg|pwd|sed\\s+-n|head|tail|wc|cat)\\b"
+        }
+      ]
+    },
+    {
+      "effect": "deny",
+      "priority": 100,
+      "argumentPatterns": null
+    }
+  ]
+}

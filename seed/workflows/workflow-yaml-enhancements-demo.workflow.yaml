@@ -1,0 +1,58 @@
+workflow_id: workflow_yaml_enhancements_demo
+name: Workflow YAML Enhancements Demo
+description: >
+  Demonstrates switch/default routing, for_each iteration, and mapping transforms
+  for special-step jobs.
+
+trigger:
+  type: manual
+  launch:
+    context: none
+    allow_raw_json: true
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: route_single_event
+    type: emit_event
+    tier: light
+    inputs:
+      event_name: WorkflowYamlEnhancementDefaultEvent
+      payload:
+        mode:
+          source: '{{ trigger.mode }}'
+          mapping:
+            fast: quick_path
+            safe: guarded_path
+          default: fallback_path
+    switch:
+      - case: '{{ trigger.use_alternate_event }}'
+        inputs:
+          event_name: WorkflowYamlEnhancementAlternateEvent
+    default:
+      inputs:
+        event_name: WorkflowYamlEnhancementDefaultEvent
+
+  - id: emit_event_batch
+    type: emit_event
+    tier: light
+    depends_on: [route_single_event]
+    for_each: '{{ trigger.batch_events }}'
+    continue_on_error: true
+    inputs:
+      event_name: '{{ item.event_name }}'
+      payload:
+        ticket_id: '{{ item.ticket_id }}'
+        decision_state:
+          source: '{{ item.decision }}'
+          mapping:
+            accept: approved
+            reject: rejected
+          default: pending

@@ -1,0 +1,27 @@
+{
+  "name": "testing-agent",
+  "tier_preference": "light",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow write *",
+      "allow edit *",
+      "allow bash *",
+      "allow query_memory *",
+      "allow step_complete *",
+      "allow spawn_subagent_async *",
+      "allow check_subagent_status *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *",
+      "allow remember *"
+    ]
+  },
+  "assigned_skills": ["task-progress-tracking"],
+  "is_active": true
+}

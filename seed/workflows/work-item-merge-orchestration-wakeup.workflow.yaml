@@ -1,0 +1,28 @@
+workflow_id: work_item_merge_orchestration_wakeup
+name: Work Item Merge Orchestration Wakeup
+description: |
+  Heartbeat: when a work item merge completes, request a CEO orchestration
+  cycle so strategy and dispatch run once more. Mirrors the cycle-request
+  pattern used by project_spec_revision_ceo's emit_cycle_request step. The
+  cycle workflow's own concurrency (max_runs:1 / on_conflict:skip) absorbs
+  bursts of merge events.
+trigger:
+  type: event
+  name: WorkItemMergeCompletedEvent
+jobs:
+  - id: request_cycle
+    type: mcp_tool_call
+    tier: light
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.orchestration_request_wakeup
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        source: work_item_merge
+        reason: Work item merge completed
+        dedupe_key: "project-orchestration-cycle:{{ trigger.scopeId }}:work_item_merge:{{ trigger.contextId }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*

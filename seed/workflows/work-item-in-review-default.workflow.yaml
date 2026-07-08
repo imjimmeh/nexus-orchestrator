@@ -1,0 +1,222 @@
+workflow_id: work_item_in_review_default
+name: Work Item In-Review Default Code Review
+description: |
+  Core default workflow that performs automated code review whenever a work item moves to in-review. The agent must submit QA decision via set_job_output; the callback records feedback and applies the status transition.
+trigger:
+  type: event
+  event: kanban.work_item.status_changed.v1
+  condition: "{{#if (eq trigger.status 'in-review')}}true{{else}}false{{/if}}"
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: remember
+jobs:
+  - id: review_work_item
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - decision
+        - feedback
+      types:
+        decision: string
+        feedback: string
+    max_retries: 2
+    retry_prompt: |
+      You have NOT called set_job_output yet. The system requires you to call this tool to record your QA decision. Please call set_job_output now with the appropriate decision (accept or reject) and feedback. Do NOT ask user questions. Use the available repository context and make a best-effort decision now.
+    inputs:
+      agent_profile: qa_automation
+      implementation_plan: "{{trigger.resource.executionConfig.implementationPlan}}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: yield_session
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: invite_war_room_participant
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: delegate_ui_ux_testing
+          - effect: allow
+            tool: delegate_web_research
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: review
+        prompt: |
+          You are the automated QA reviewer for this work item.
+
+          Scope ID: {{trigger.scopeId}}
+          Context ID: {{trigger.contextId}}
+          Previous Status: {{trigger.previousStatus}}
+          New Status: {{trigger.status}}
+          Existing Execution ID: {{trigger.resource.currentExecutionId}}
+
+          Review scope:
+          - Title: {{trigger.resource.title}}
+          - Description: {{trigger.resource.description}}
+          - Type: {{trigger.resource.type}}
+          - Priority: {{trigger.resource.priority}}
+
+          {{#if implementation_plan}}
+          Implementation Plan:
+          {{implementation_plan}}
+          {{/if}}
+
+           CRITICAL INSTRUCTIONS — read carefully:
+            1) Determine expected deliverables from the work-item description and changed files.
+              - If this is a PM/spec decomposition item, verify the linked markdown artifact exists at `trigger.resource.metadata.workItemMarkdownPath` (or `trigger.resource.metadata.specFile` for legacy items). Validate frontmatter (title/priority/scope and depends_on when applicable), coherent decomposition, and sufficient implementation granularity.
+                - For greenfield/new-project scope, verify there is setup/bootstrap coverage for initial project initialization and baseline tooling (for example npm init, lint/test bootstrap, CI baseline).
+                - Check for proper use of `depends_on` field in frontmatter when items have dependencies. The frontmatter MUST include `item_id`:
+                  ---
+                  item_id: TASK-api-endpoints
+                  title: Create API endpoints
+                  priority: p1
+                  scope: standard
+                  depends_on: TASK-database-models, TASK-auth-middleware
+                  ---
+                - Only declare DIRECT dependencies (not transitive)
+                - Use comma-separated list of spec file slugs (without .md extension)
+                - Omit the field if no dependencies exist
+              - If this is an implementation item, review the implementation against both the spec AND the implementation plan (if provided).
+                Verify:
+                1. Each deliverable section in the plan was actually implemented
+                2. Cross-deliverable integration is correct (imports, shared types, etc.)
+                3. Tests cover all acceptance criteria from the spec
+                4. No leftover TODOs, placeholder code, or debug artifacts
+                5. Code quality, security, and style standards
+                If the implementation plan is not present (standard scope item), review against the spec only.
+          2) You MUST call the set_job_output tool to record your decision. Writing your decision in text is NOT sufficient — the system only processes decisions submitted via the tool.
+          3) If there are blocking issues, call set_job_output with:
+             - data:
+               - decision: reject
+               - feedback: concise, actionable list of issues to fix.
+               - failed_deliverables: structured list indicating which specific deliverables failed and why.
+          4) If review passes, call set_job_output with:
+             - data:
+               - decision: accept
+               - feedback: short approval summary.
+          5) Submit exactly one QA decision via the set_job_output tool. Do NOT just write "accept" or "reject" in your response — you MUST call the tool.
+          6) DO NOT call ask_user_questions or any interactive question tool. There is no interactive user in this workflow run.
+          7) If information is incomplete, make explicit assumptions and still submit a QA decision via set_job_output.
+
+          Specialist Delegation Digressions:
+          - You may call a `delegate_*` specialist tool only when you can name the concrete question, task, or outcome it should answer. Do not delegate vague exploration or routine work.
+          - The delegate tool durably awaits and returns the child workflow result; do not call `await_agent_workflow` after a delegate tool.
+          - Consume the returned result before making your QA decision. If the result is inconclusive, record the uncertainty explicitly rather than inventing evidence.
+          - Use `delegate_ui_ux_testing` for UI-facing changes when browser validation, screenshots, accessibility checks, or flow validation would materially affect accept/reject.
+          - Use `delegate_web_research` only when review depends on external standards or cited documentation.
+          - Specialist results inform the QA decision; they do not replace the required `set_job_output` decision.
+  - id: apply_qa_decision
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - record_qa_feedback
+      - record_failed_deliverables
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        status:
+          source: "{{ jobs.review_work_item.output.decision }}"
+          mapping:
+            accept: ready-to-merge
+            reject: in-progress
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: record_qa_feedback
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - review_work_item
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_append_metadata_array
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        arrayPath: qaFeedback
+        arrayValue:
+          decision: "{{ jobs.review_work_item.output.decision }}"
+          feedback: "{{ jobs.review_work_item.output.feedback }}"
+          reviewerAgentId: "{{ jobs.review_work_item.output.reviewer_agent_id }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: record_failed_deliverables
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - record_qa_feedback
+    condition: "{{#if (eq jobs.review_work_item.output.decision 'reject')}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_execution_config
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        executionConfigPatch:
+          rejectionFeedback:
+            feedback: "{{ jobs.review_work_item.output.feedback }}"
+            failedDeliverables: "{{ jobs.review_work_item.output.failed_deliverables }}"
+            failed_deliverables: "{{ jobs.review_work_item.output.failed_deliverables }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list

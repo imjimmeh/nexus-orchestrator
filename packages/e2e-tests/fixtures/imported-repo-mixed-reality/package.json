@@ -1,0 +1,15 @@
+{
+  "name": "imported-mixed-reality-fixture",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Deterministic imported repository fixture for the mixed-reality E2E test (E167-033).",
+  "scripts": {
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}

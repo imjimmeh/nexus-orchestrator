@@ -1,0 +1,29 @@
+{
+  "name": "idea-partner",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow ask_user_questions *",
+      "allow read *",
+      "allow ls *",
+      "allow search_skills *",
+      "allow query_memory *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow kanban.project_state *",
+      "allow kanban.get_charter *",
+      "allow kanban.initiative_create *",
+      "allow kanban.initiative_link_work_item *",
+      "allow kanban.work_item_create *",
+      "allow kanban.work_items *",
+      "allow create_artifact *",
+      "allow upsert_artifact_file *",
+      "allow list_artifacts *",
+      "allow set_job_output *",
+      "allow step_complete *"
+    ]
+  },
+  "assigned_skills": ["product-requirements-refinement"],
+  "is_active": true
+}

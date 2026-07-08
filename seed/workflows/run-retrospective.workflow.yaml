@@ -1,0 +1,70 @@
+workflow_id: run_retrospective
+name: Run Retrospective Analysis
+description: >
+  Read-only retrospective analyst. Launched with a struggle-anchored, evidence-cited
+  digest of a terminal run. A light-tier analyst diagnoses durable, generalizable
+  lessons and emits structured findings; it mutates nothing. The router (not this
+  workflow) records any memories or skill proposals the findings warrant.
+
+trigger:
+  type: manual
+  inputs:
+    - name: workflow_run_id
+      type: string
+      required: true
+    - name: digest
+      type: string
+      required: true
+    - name: scope_id
+      type: string
+      required: false
+    - name: agent_profile
+      type: string
+      required: false
+    - name: workflow_yaml
+      type: string
+      required: false
+    - name: acting_agent_profiles
+      type: string
+      required: false
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: find
+      - effect: allow
+        tool: grep
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+
+concurrency:
+  max_runs: 3
+  on_conflict: queue
+
+jobs:
+  - id: analyze
+    type: execution
+    tier: light
+    inputs:
+      agent_profile: retrospective-analyst
+      workflow_run_id: "{{ trigger.workflow_run_id }}"
+      digest: "{{ trigger.digest }}"
+      scope_id: "{{ trigger.scope_id }}"
+      workflow_yaml: "{{ trigger.workflow_yaml }}"
+      acting_agent_profiles: "{{ trigger.acting_agent_profiles }}"
+    output_contract:
+      required:
+        - findings
+    steps:
+      - id: analyze
+        prompt_file: prompts/run-retrospective/analyze.md

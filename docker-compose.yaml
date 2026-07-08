@@ -1,0 +1,334 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:0.8.3-pg18}
+    container_name: ${POSTGRES_CONTAINER_NAME:-nexus-postgres}
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-nexus}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nexus_password}
+      - POSTGRES_DB=${POSTGRES_DB:-nexus_orchestrator}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-nexus} -d ${POSTGRES_DB:-nexus_orchestrator}
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    container_name: ${REDIS_CONTAINER_NAME:-nexus-redis}
+    ports:
+      - "${REDIS_HOST_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+
+  honcho-db:
+    image: ${HONCHO_POSTGRES_IMAGE:-pgvector/pgvector:pg15}
+    container_name: ${HONCHO_POSTGRES_CONTAINER_NAME:-nexus-honcho-postgres}
+    profiles: ["honcho"]
+    environment:
+      - POSTGRES_USER=${HONCHO_POSTGRES_USER:-honcho}
+      - POSTGRES_PASSWORD=${HONCHO_POSTGRES_PASSWORD:-honcho_password}
+      - POSTGRES_DB=${HONCHO_POSTGRES_DB:-honcho}
+    ports:
+      - "${HONCHO_POSTGRES_HOST_PORT:-5443}:5432"
+    volumes:
+      - honcho_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${HONCHO_POSTGRES_USER:-honcho} -d ${HONCHO_POSTGRES_DB:-honcho}
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+
+  honcho-api:
+    image: ${HONCHO_IMAGE:-ghcr.io/plastic-labs/honcho:latest}
+    container_name: ${HONCHO_API_CONTAINER_NAME:-nexus-honcho-api}
+    profiles: ["honcho"]
+    environment:
+      - DB_CONNECTION_URI=postgresql+psycopg://${HONCHO_POSTGRES_USER:-honcho}:${HONCHO_POSTGRES_PASSWORD:-honcho_password}@honcho-db:5432/${HONCHO_POSTGRES_DB:-honcho}
+      - AUTH_USE_AUTH=${HONCHO_AUTH_USE_AUTH:-false}
+    ports:
+      - "${HONCHO_API_HOST_PORT:-8030}:8000"
+    depends_on:
+      honcho-db:
+        condition: service_healthy
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+
+  honcho-deriver:
+    image: ${HONCHO_IMAGE:-ghcr.io/plastic-labs/honcho:latest}
+    container_name: ${HONCHO_DERIVER_CONTAINER_NAME:-nexus-honcho-deriver}
+    profiles: ["honcho"]
+    command: ["python", "-m", "src.deriver"]
+    environment:
+      - DB_CONNECTION_URI=postgresql+psycopg://${HONCHO_POSTGRES_USER:-honcho}:${HONCHO_POSTGRES_PASSWORD:-honcho_password}@honcho-db:5432/${HONCHO_POSTGRES_DB:-honcho}
+      - AUTH_USE_AUTH=${HONCHO_AUTH_USE_AUTH:-false}
+    depends_on:
+      honcho-db:
+        condition: service_healthy
+      honcho-api:
+        condition: service_started
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    container_name: ${API_CONTAINER_NAME:-nexus-api}
+    environment:
+      - PORT=${PORT:-3000}
+      - NODE_ENV=${NODE_ENV:-development}
+      - NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=4096}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USERNAME=${POSTGRES_USER:-nexus}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-nexus_password}
+      - DB_DATABASE=${POSTGRES_DB:-nexus_orchestrator}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BULLMQ_QUEUE_NAME=${BULLMQ_QUEUE_NAME:-bull:workflow_steps}
+      - DOCKER_SOCKET_PATH=${DOCKER_SOCKET_PATH:-/var/run/docker.sock}
+      - JWT_SECRET=${JWT_SECRET:-nexus-e2e-secret}
+      - TELEMETRY_PUBLIC_WS_URL=${TELEMETRY_PUBLIC_WS_URL:-http://localhost:3011}
+      - WEBSOCKET_URL=http://nexus-api:3001
+      - CONTEXT_DISPATCH_BASE_URL=${CONTEXT_DISPATCH_BASE_URL:-http://kanban:3012/api}
+      - NEXUS_DOCKER_NETWORK=${NEXUS_DOCKER_NETWORK:-nexus-network}
+      - NEXUS_WORKSPACE_BASE_PATH=/data/nexus-workspaces
+      - NEXUS_WORKSPACE_EXPORT_PATH=/data/nexus-workspaces
+      - NEXUS_SKILLS_LIBRARY_PATH=/data/nexus-skills
+      - NEXUS_SKILLS_SEED_PATH=/app/seed/skills
+      - NEXUS_AGENTS_SEED_PATH=/app/seed/agents
+      - NEXUS_AGENT_SKILL_ASSIGNMENTS_SEED_PATH=/app/seed/agents/skill-assignments.seed.json
+      - NEXUS_WORKFLOWS_SEED_PATH=/app/seed/workflows
+      - NEXUS_HOST_WORKSPACE_PATH=${NEXUS_HOST_WORKSPACE_PATH:-}
+      - NEXUS_HOST_SKILLS_PATH=${NEXUS_HOST_SKILLS_PATH:-}
+      - NEXUS_HOST_TOOL_MOUNT_PATH=${NEXUS_HOST_TOOL_MOUNT_PATH:-}
+      - NEXUS_HOST_CHECKPOINT_PATH=${NEXUS_HOST_CHECKPOINT_PATH:-}
+      - NEXUS_HOST_SHARE_MOUNT_PATH=${NEXUS_HOST_SHARE_MOUNT_PATH:-}
+      - NEXUS_API_HOST_SHARE_BASE_PATH=${NEXUS_API_HOST_SHARE_BASE_PATH:-/data/nexus-host-shares}
+      - NEXUS_HOST_MOUNT_CATALOG_JSON=${NEXUS_HOST_MOUNT_CATALOG_JSON:-}
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      - MEMORY_BACKEND=${MEMORY_BACKEND:-postgres}
+      - HONCHO_BASE_URL=${HONCHO_BASE_URL:-http://honcho-api:8000}
+      - HONCHO_API_KEY=${HONCHO_API_KEY:-}
+      - HONCHO_DEFAULT_WORKSPACE=${HONCHO_DEFAULT_WORKSPACE:-nexus}
+      - HONCHO_WORKSPACE_STRATEGY=${HONCHO_WORKSPACE_STRATEGY:-global}
+      - HONCHO_REQUEST_TIMEOUT_MS=${HONCHO_REQUEST_TIMEOUT_MS:-5000}
+      - HONCHO_RETRY_COUNT=${HONCHO_RETRY_COUNT:-1}
+      - HONCHO_FALLBACK_ON_ERROR=${HONCHO_FALLBACK_ON_ERROR:-true}
+      - HONCHO_FALLBACK_ON_EMPTY=${HONCHO_FALLBACK_ON_EMPTY:-true}
+      - ORCHESTRATION_AUTO_RESTART_COOLDOWN_SECONDS=${ORCHESTRATION_AUTO_RESTART_COOLDOWN_SECONDS:-300}
+      - CHAT_TELEGRAM_BOT_TOKEN=${CHAT_TELEGRAM_BOT_TOKEN:-}
+      - CHAT_TELEGRAM_WEBHOOK_SECRET=${CHAT_TELEGRAM_WEBHOOK_SECRET:-}
+      - CHAT_TELEGRAM_INGRESS_MODE=${CHAT_TELEGRAM_INGRESS_MODE:-webhook}
+      - CHAT_TELEGRAM_POLL_TIMEOUT_SECONDS=${CHAT_TELEGRAM_POLL_TIMEOUT_SECONDS:-50}
+      - CHAT_TELEGRAM_POLL_RETRY_DELAY_MS=${CHAT_TELEGRAM_POLL_RETRY_DELAY_MS:-1000}
+      - CHAT_TELEGRAM_POLL_BACKOFF_MAX_MS=${CHAT_TELEGRAM_POLL_BACKOFF_MAX_MS:-30000}
+      - CHAT_TELEGRAM_OUTBOUND_RELAY_ENABLED=${CHAT_TELEGRAM_OUTBOUND_RELAY_ENABLED:-true}
+      - CHAT_TELEGRAM_OUTBOUND_RELAY_INTERVAL_MS=${CHAT_TELEGRAM_OUTBOUND_RELAY_INTERVAL_MS:-3000}
+      - CHAT_TELEGRAM_OUTBOUND_RELAY_BATCH_SIZE=${CHAT_TELEGRAM_OUTBOUND_RELAY_BATCH_SIZE:-20}
+      - CHAT_TELEGRAM_DEFAULT_AGENT_PROFILE=${CHAT_TELEGRAM_DEFAULT_AGENT_PROFILE:-friendly-general-assistant}
+      - CHAT_TELEGRAM_DEFAULT_PROJECT_ID=${CHAT_TELEGRAM_DEFAULT_PROJECT_ID:-}
+      - CHAT_TELEGRAM_ALLOWED_USER_IDS=${CHAT_TELEGRAM_ALLOWED_USER_IDS:-}
+      - DOCTOR_SPLIT_SERVICE_TIMEOUT_MS=${DOCTOR_SPLIT_SERVICE_TIMEOUT_MS:-3000}
+      - E2E_PROVIDER_NAME=${E2E_PROVIDER_NAME:-}
+      - E2E_MODEL_NAME=${E2E_MODEL_NAME:-}
+      - E2E_PROVIDER_BASE_URL=${E2E_PROVIDER_BASE_URL:-}
+      - E2E_PROVIDER_API_KEY=${E2E_PROVIDER_API_KEY:-}
+      - E2E_PROVIDER_SECRET_NAME=${E2E_PROVIDER_SECRET_NAME:-}
+      - E2E_PROVIDER_SECRET_KEY=${E2E_PROVIDER_SECRET_KEY:-}
+      - E2E_OPENAI_API_KEY=${E2E_OPENAI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - SEED_LLM_SECRET_FROM_ENV=${SEED_LLM_SECRET_FROM_ENV:-true}
+      - SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY:-nexus-e2e-secret}
+    ports:
+      - "${API_HTTP_HOST_PORT:-3010}:3000"
+      - "${API_WS_HOST_PORT:-3011}:3001"
+    # Must exceed EXECUTION_FREEZE_BUDGET_MS (default 20000ms, hard-capped 25000ms). Keep in sync.
+    stop_grace_period: 30s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${NEXUS_HOST_WORKSPACE_PATH:-nexus_workspace_data}:/data/nexus-workspaces
+      - ${NEXUS_HOST_SKILLS_PATH:-./storage/skills}:/data/nexus-skills
+      - ${NEXUS_HOST_SEED_PATH:-./seed}:/app/seed:ro
+      - ${NEXUS_HOST_TOOL_MOUNT_PATH:-./data/tool-mounts}:/tmp/nexus-tools
+      - ${NEXUS_HOST_CHECKPOINT_PATH:-./data/checkpoints}:/tmp/nexus-checkpoints
+      - ${NEXUS_HOST_SHARE_MOUNT_PATH:-./data/host-shares}:/data/nexus-host-shares
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const req = require('http').get('http://127.0.0.1:3000/api/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)); req.setTimeout(10000, () => { req.destroy(); process.exit(1); }); req.on('error', () => process.exit(1));",
+        ]
+      interval: 10s
+      timeout: 15s
+      retries: 6
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+
+  kanban:
+    build:
+      context: .
+      dockerfile: apps/kanban/Dockerfile
+    container_name: ${KANBAN_CONTAINER_NAME:-nexus-kanban}
+    restart: unless-stopped
+    environment:
+      - KANBAN_PORT=${KANBAN_PORT:-3012}
+      - KANBAN_PUBLIC_WS_URL=${KANBAN_PUBLIC_WS_URL:-http://localhost:3012}
+      - NODE_ENV=${NODE_ENV:-development}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USERNAME=${POSTGRES_USER:-nexus}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-nexus_password}
+      - DB_DATABASE=${POSTGRES_DB:-nexus_orchestrator}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - KANBAN_CORE_BASE_URL=${KANBAN_CORE_BASE_URL:-http://api:3000/api}
+      - KANBAN_SERVICE_BASE_URL=${KANBAN_SERVICE_BASE_URL:-http://kanban:3012/api}
+      - KANBAN_CORE_BEARER_TOKEN=${KANBAN_CORE_BEARER_TOKEN:-}
+      - KANBAN_SERVICE_BEARER_TOKEN=${KANBAN_SERVICE_BEARER_TOKEN:-nexus-kanban-internal-token}
+      - KANBAN_SERVICE_JWT_AUDIENCE=${KANBAN_SERVICE_JWT_AUDIENCE:-nexus-kanban-service}
+      - KANBAN_SERVICE_JWT_ISSUER=${KANBAN_SERVICE_JWT_ISSUER:-nexus-api}
+      - KANBAN_SERVICE_JWT_TTL=${KANBAN_SERVICE_JWT_TTL:-5m}
+      - KANBAN_CORE_JWT_AUDIENCE=${KANBAN_CORE_JWT_AUDIENCE:-nexus-core-internal}
+      - KANBAN_CORE_JWT_ISSUER=${KANBAN_CORE_JWT_ISSUER:-nexus-kanban}
+      - KANBAN_CORE_JWT_TTL=${KANBAN_CORE_JWT_TTL:-5m}
+      - JWT_SECRET=${JWT_SECRET:-nexus-e2e-secret}
+      - NEXUS_WORKSPACE_BASE_PATH=/data/nexus-workspaces
+    ports:
+      - "${KANBAN_HOST_PORT:-3012}:3012"
+    # Must exceed EXECUTION_FREEZE_BUDGET_MS (default 20000ms, hard-capped 25000ms). Keep in sync.
+    stop_grace_period: 30s
+    volumes:
+      - ${NEXUS_HOST_WORKSPACE_PATH:-nexus_workspace_data}:/data/nexus-workspaces
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3012/api/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    develop:
+      watch:
+        - action: sync
+          path: ./apps/web/src
+          target: /app/apps/web/src
+        - action: sync
+          path: ./packages
+          target: /app/packages
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./apps/web/package.json
+    ports:
+      - "${WEB_HOST_PORT:-3120}:80"
+    environment:
+      - API_URL=${API_URL:-/api}
+      - CORE_API_URL=${CORE_API_URL:-/api}
+      - KANBAN_API_URL=${KANBAN_API_URL:-/kanban-api}
+      - CHAT_API_URL=${CHAT_API_URL:-/chat-api}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    depends_on:
+      api:
+        condition: service_healthy
+      kanban:
+        condition: service_healthy
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+
+  garage:
+    image: ${GARAGE_IMAGE:-dxflrs/garage:v1.0.1}
+    container_name: ${GARAGE_CONTAINER_NAME:-nexus-garage}
+    restart: unless-stopped
+    ports:
+      # Only the S3 API port is mapped to the host for dev deployments.
+      # Ports 3902 (web) and 3903 (admin) are intentionally not exposed to the host.
+      - "${GARAGE_S3_HOST_PORT:-3900}:3900"
+    volumes:
+      - ./infra/garage/garage.toml:/etc/garage.toml:ro
+      - garage_data:/var/lib/garage/data
+      - garage_meta:/var/lib/garage/meta
+    environment:
+      GARAGE_CONFIG_FILE: /etc/garage.toml
+    networks:
+      - ${NEXUS_DOCKER_NETWORK:-nexus-network}
+    healthcheck:
+      # The garage binary lives at /garage and is not on PATH in this image.
+      test: ["CMD", "/garage", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:
+    name: ${POSTGRES_VOLUME_NAME:-nexus-postgres-data}
+    driver: local
+  honcho_postgres_data:
+    name: ${HONCHO_POSTGRES_VOLUME_NAME:-nexus-honcho-postgres-data}
+    driver: local
+  nexus_workspace_data:
+    name: ${NEXUS_WORKSPACE_VOLUME_NAME:-nexus-workspace-data}
+    driver: local
+  garage_data:
+    name: ${GARAGE_DATA_VOLUME_NAME:-nexus-garage-data}
+    driver: local
+  garage_meta:
+    name: ${GARAGE_META_VOLUME_NAME:-nexus-garage-meta}
+    driver: local
+
+networks:
+  nexus-network:
+    name: ${NEXUS_DOCKER_NETWORK:-nexus-network}
+    driver: bridge

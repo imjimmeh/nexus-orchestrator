@@ -1,0 +1,1 @@
+export const KANBAN_REDIS_CLIENT = Symbol("KANBAN_REDIS_CLIENT");

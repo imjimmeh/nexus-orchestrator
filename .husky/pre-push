@@ -1,0 +1,28 @@
+#!/bin/sh
+# Lint and unit tests below are type-aware: ESLint and the test runners resolve
+# workspace packages (notably @nexus/core) through their built dist/ output.
+# In a fresh worktree/clone — e.g. the auto-merge runtime — those packages are
+# unbuilt, so lint fails for the wrong reason. Build first (turbo-cached, so a
+# warm tree is near-instant) to guarantee a consistent, resolvable state.
+echo "Pre-push: building all workspaces..."
+npm run build || exit 1
+
+echo "Pre-push: running architecture regression guards..."
+npm run architecture:assert-no-global-modules || exit 1
+
+echo "Pre-push: running lint across all workspaces..."
+npm run lint || exit 1
+
+echo "Pre-push: running unit tests..."
+# Unit tests only. Integration suites (apps/*/test/**, *.integration*) are
+# heavier, hit real infra (DB/redis/containers), and flake under the loaded
+# push environment — they run in CI via test:integration:* / test:e2e:*, not
+# here. Cap worker forks to keep peak memory bounded: the gate runs alongside
+# the Docker VM + the just-finished build/lint, so the default core-count fork
+# pool can OOM-kill a worker ("Worker exited unexpectedly"). Override by
+# exporting VITEST_MAX_FORKS before pushing; unset locally = fast.
+VITEST_MAX_FORKS="${VITEST_MAX_FORKS:-4}" npm run test:api || exit 1
+VITEST_MAX_FORKS="${VITEST_MAX_FORKS:-4}" npm run test:unit:kanban || exit 1
+VITEST_MAX_FORKS="${VITEST_MAX_FORKS:-4}" npm run test:unit:web || exit 1
+
+echo "Pre-push checks passed."

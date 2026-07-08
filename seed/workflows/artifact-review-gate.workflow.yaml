@@ -1,0 +1,99 @@
+workflow_id: artifact_review_gate
+name: Artifact Review Gate
+description: >
+  Human approval workflow for reviewing generated PRD and SDD artifacts before
+  work items are created. Supports approval with feedback and rejection with revision loop.
+
+trigger:
+  type: manual
+  inputs:
+    - name: workItemId
+      type: string
+      required: true
+    - name: artifacts
+      type: array
+      required: false
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: create_artifact
+      - effect: allow
+        tool: read_document
+      - effect: allow
+        tool: kanban.propose_work_items
+
+jobs:
+  - id: present_artifacts
+    type: execution
+    tier: heavy
+    inputs:
+      agent_profile: product_manager_ingestion
+    steps:
+      - id: present
+        type: agent
+        prompt: |
+          Read docs/PRD.md and docs/SDD.md.
+          Produce a concise summary (max 500 words) covering:
+          - What product/feature this describes
+          - Key user stories and acceptance criteria
+          - Technical components planned
+          - Open questions requiring human input
+          Use set_job_output: { "summary": "...", "artifact_paths": ["docs/PRD.md", "docs/SDD.md"] }
+
+  - id: await_approval
+    type: execution
+    tier: light
+    depends_on: [present_artifacts]
+    inputs:
+      agent_profile: git_verifier
+    steps:
+      - id: await
+        type: agent
+        prompt: |
+          The artifacts have been presented for review.
+          Check the job context for a human approval decision.
+          If approved: use set_job_output with { "approved": true }
+          If rejected: use set_job_output with { "approved": false, "rejection_reason": "..." }
+          Timeout: 48 hours.
+
+  - id: on_approved
+    type: execution
+    tier: light
+    depends_on: [await_approval]
+    condition: "{{#if trigger.approved}}true{{else}}false{{/if}}"
+    inputs:
+      agent_profile: product_manager_ingestion
+    steps:
+      - id: approve
+        type: agent
+        prompt: |
+          Human approved the artifacts.
+          Use kanban.propose_work_items to create work items from docs/PRD.md.
+          Set status to draft and metadata source: design_ingestion.
+          Use set_job_output: { "status": "approved", "work_items_created": [] }
+
+  - id: on_rejected
+    type: execution
+    tier: heavy
+    depends_on: [await_approval]
+    condition: "{{#unless trigger.approved}}true{{else}}false{{/unless}}"
+    inputs:
+      agent_profile: product_manager_ingestion
+    steps:
+      - id: reject
+        type: agent
+        prompt: |
+          Human rejected artifacts with feedback: {{ trigger.rejection_reason }}
+
+          Address the feedback:
+          1. Update docs/PRD.md to incorporate the feedback
+          2. Notify the architect to update docs/SDD.md if needed
+          3. Commit all changes
+          4. Use set_job_output: { "status": "revised", "changes_made": "..." }

@@ -1,0 +1,348 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
+import { AiConfigurationService } from './ai-configuration.service';
+import { AgentProfileRepository } from '../database/repositories/agent-profile.repository';
+import { LlmModelRepository } from '../database/repositories/llm-model.repository';
+import { LlmProviderRepository } from '../database/repositories/llm-provider.repository';
+import { SecretStoreRepository } from '../database/repositories/secret-store.repository';
+import { SecretVaultService } from './secret-vault.service';
+import { AgentProfile } from '../database/entities/agent-profile.entity';
+import { LlmModel } from '../database/entities/llm-model.entity';
+import { LlmProvider } from '../database/entities/llm-provider.entity';
+import { SecretStore } from '../database/entities/secret-store.entity';
+
+type MockAgentProfiles = {
+  findByName: jest.Mock<Promise<AgentProfile | null>, [string]>;
+};
+
+type MockModels = {
+  findDefaultForUseCase: jest.Mock<Promise<LlmModel | null>, [string]>;
+  findByName: jest.Mock<Promise<LlmModel | null>, [string]>;
+};
+
+type MockProviders = {
+  findByName: jest.Mock<Promise<LlmProvider | null>, [string]>;
+};
+
+type MockSecrets = {
+  findById: jest.Mock<Promise<SecretStore | null>, [string]>;
+};
+
+type MockVault = {
+  decrypt: jest.Mock<string, [string]>;
+};
+
+describe('AiConfigurationService', () => {
+  let service: AiConfigurationService;
+  let mockAgentProfiles: MockAgentProfiles;
+  let mockModels: MockModels;
+  let mockProviders: MockProviders;
+  let mockSecrets: MockSecrets;
+  let mockVault: MockVault;
+
+  beforeEach(async () => {
+    const mockConfigService = {
+      get: jest.fn((key: string) => {
+        if (key === 'MODEL') return 'env-model';
+        if (key === 'DISTILLATION_MODEL') return 'env-distill';
+        if (key === 'SUMMARIZATION_MODEL') return 'env-summary';
+        return undefined;
+      }),
+    };
+
+    mockAgentProfiles = {
+      findByName: jest.fn(),
+    };
+
+    mockModels = {
+      findDefaultForUseCase: jest.fn(),
+      findByName: jest.fn(),
+    };
+
+    mockProviders = {
+      findByName: jest.fn(),
+    };
+
+    mockSecrets = {
+      findById: jest.fn(),
+    };
+
+    mockVault = {
+      decrypt: jest.fn(),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AiConfigurationService,
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: AgentProfileRepository, useValue: mockAgentProfiles },
+        { provide: LlmModelRepository, useValue: mockModels },
+        { provide: LlmProviderRepository, useValue: mockProviders },
+        { provide: SecretStoreRepository, useValue: mockSecrets },
+        { provide: SecretVaultService, useValue: mockVault },
+      ],
+    }).compile();
+
+    service = module.get<AiConfigurationService>(AiConfigurationService);
+  });
+
+  it('resolves step settings with explicit values taking precedence', async () => {
+    mockAgentProfiles.findByName.mockResolvedValue({
+      id: 'profile-1',
+      name: 'qa_automation',
+      model_name: 'profile-model',
+      provider_name: 'profile-provider',
+      system_prompt: 'profile-prompt',
+      tier_preference: 'light',
+      is_active: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockModels.findDefaultForUseCase.mockResolvedValue({
+      id: 'model-1',
+      name: 'db-model',
+      provider_name: 'openai',
+      token_limit: 128000,
+      default_for_execution: true,
+      default_for_distillation: false,
+      default_for_summarization: false,
+      default_for_session: true,
+      is_active: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    const resolved = await service.resolveStepSettings({
+      explicitModel: 'explicit-model',
+      explicitSystemPrompt: 'explicit-prompt',
+      explicitProviderName: 'explicit-provider',
+      agentProfileName: 'qa_automation',
+    });
+
+    expect(resolved).toEqual({
+      model: 'explicit-model',
+      systemPrompt: 'explicit-prompt',
+      providerName: 'explicit-provider',
+    });
+  });
+
+  it('falls back to environment model when DB default is missing', async () => {
+    mockModels.findDefaultForUseCase.mockResolvedValue(null);
+
+    const model = await service.getModelForUseCase('distillation');
+    expect(model).toBe('env-distill');
+  });
+
+  it('keeps configured provider and model values unchanged', async () => {
+    mockAgentProfiles.findByName.mockResolvedValue({
+      id: 'profile-legacy-1',
+      name: 'testing-agent',
+      model_name: 'MiniMaxAI/MiniMax-M2.5-TEE',
+      provider_name: 'chutes.ai',
+      system_prompt: 'legacy-prompt',
+      tier_preference: 'light',
+      is_active: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    const resolved = await service.resolveStepSettings({
+      agentProfileName: 'testing-agent',
+    });
+
+    expect(resolved).toEqual({
+      model: 'MiniMaxAI/MiniMax-M2.5-TEE',
+      systemPrompt: 'legacy-prompt',
+      providerName: 'chutes.ai',
+    });
+  });
+
+  it('builds provider env from runtime env and decrypted secret payload', async () => {
+    mockProviders.findByName.mockResolvedValue({
+      id: 'provider-1',
+      name: 'openai',
+      auth_type: 'oauth',
+      secret_id: 'secret-1',
+      runtime_env: {
+        OPENAI_BASE_URL: 'https://api.openai.com/v1',
+        ENABLED: true,
+        OBJECT_VALUE: { nested: true },
+      },
+      is_active: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockSecrets.findById.mockResolvedValue({
+      id: 'secret-1',
+      name: 'openai-secret',
+      encrypted_value: 'encrypted',
+      metadata: {},
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockVault.decrypt.mockReturnValue(
+      JSON.stringify({ OPENAI_API_KEY: 'key-123', TOKEN_TTL: 3600 }),
+    );
+
+    const env = await service.buildProviderEnvByName('openai');
+
+    expect(env).toEqual({
+      OPENAI_BASE_URL: 'https://api.openai.com/v1',
+      ENABLED: 'true',
+      OPENAI_API_KEY: 'key-123',
+      TOKEN_TTL: '3600',
+    });
+    expect(env.OBJECT_VALUE).toBeUndefined();
+  });
+
+  it('resolves runner provider config with explicit field names from runtime env', async () => {
+    mockProviders.findByName.mockImplementation(async (name: string) => {
+      if (name === 'custom-minimax') {
+        return {
+          id: 'provider-legacy-rich',
+          name: 'custom-minimax',
+          auth_type: 'api_key',
+          secret_id: 'secret-legacy-1',
+          runtime_env: {
+            pi_provider: 'minimax',
+            api_key_field: 'CUSTOM_MINIMAX_API_KEY',
+            base_url_field: 'CUSTOM_MINIMAX_BASE_URL',
+          },
+          is_active: true,
+          created_at: new Date('2026-01-01'),
+          updated_at: new Date('2026-01-01'),
+        };
+      }
+
+      return null;
+    });
+
+    mockModels.findByName.mockResolvedValue({
+      id: 'model-legacy-1',
+      name: 'minimax-model',
+      provider_name: 'custom-minimax',
+      token_limit: 128000,
+      default_for_execution: true,
+      default_for_distillation: false,
+      default_for_summarization: false,
+      default_for_session: false,
+      is_active: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockSecrets.findById.mockResolvedValue({
+      id: 'secret-legacy-1',
+      name: 'legacy-secret',
+      encrypted_value: 'encrypted-legacy',
+      metadata: {},
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockVault.decrypt.mockReturnValue(
+      JSON.stringify({
+        CUSTOM_MINIMAX_API_KEY: 'legacy-key',
+        CUSTOM_MINIMAX_BASE_URL: 'https://llm.chutes.ai/v1/',
+      }),
+    );
+
+    const resolved = await service.resolveRunnerProviderConfig({
+      modelName: 'minimax-model',
+      providerName: 'custom-minimax',
+    });
+
+    expect(resolved).toEqual({
+      provider: 'minimax',
+      apiKey: 'legacy-key',
+      baseUrl: 'https://llm.chutes.ai/v1',
+      providerEnv: {
+        pi_provider: 'minimax',
+        api_key_field: 'CUSTOM_MINIMAX_API_KEY',
+        base_url_field: 'CUSTOM_MINIMAX_BASE_URL',
+        CUSTOM_MINIMAX_API_KEY: 'legacy-key',
+        CUSTOM_MINIMAX_BASE_URL: 'https://llm.chutes.ai/v1/',
+      },
+    });
+  });
+
+  it('resolves provider-scoped API key without hardcoded provider aliases', async () => {
+    mockProviders.findByName.mockResolvedValue({
+      id: 'provider-1',
+      name: 'minimax',
+      auth_type: 'api_key',
+      secret_id: 'secret-1',
+      runtime_env: {},
+      is_active: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockModels.findByName.mockResolvedValue({
+      id: 'model-1',
+      name: 'MiniMax-M2.5',
+      provider_name: 'minimax',
+      token_limit: 128000,
+      default_for_execution: true,
+      default_for_distillation: false,
+      default_for_summarization: false,
+      default_for_session: false,
+      is_active: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockSecrets.findById.mockResolvedValue({
+      id: 'secret-1',
+      name: 'minimax-secret',
+      encrypted_value: 'encrypted',
+      metadata: {},
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockVault.decrypt.mockReturnValue(
+      JSON.stringify({ MINIMAX_API_KEY: 'minimax-key' }),
+    );
+
+    const resolved = await service.resolveRunnerProviderConfig({
+      modelName: 'MiniMax-M2.5',
+      providerName: 'minimax',
+    });
+
+    expect(resolved.provider).toBe('minimax');
+    expect(resolved.apiKey).toBe('minimax-key');
+  });
+
+  it('supports plain JSON secret payload fallback when decrypt fails', async () => {
+    mockProviders.findByName.mockResolvedValue({
+      id: 'provider-2',
+      name: 'openai',
+      auth_type: 'api_key',
+      secret_id: 'secret-2',
+      runtime_env: {},
+      is_active: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockSecrets.findById.mockResolvedValue({
+      id: 'secret-2',
+      name: 'openai-secret-plain',
+      encrypted_value: '{"OPENAI_API_KEY":"plain-json-key"}',
+      metadata: {},
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    });
+
+    mockVault.decrypt.mockImplementation(() => {
+      throw new Error('decrypt failed');
+    });
+
+    const env = await service.buildProviderEnvByName('openai');
+    expect(env).toEqual({ OPENAI_API_KEY: 'plain-json-key' });
+  });
+});

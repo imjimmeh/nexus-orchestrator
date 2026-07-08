@@ -1,0 +1,38 @@
+diff --git a/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js b/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js
+index 5b6becd..dca3cc1 100644
+--- a/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js
++++ b/node_modules/@earendil-works/pi-agent-core/dist/agent-loop.js
+@@ -29,7 +29,8 @@ export function agentLoopContinue(context, config, signal, streamFn) {
+         throw new Error("Cannot continue: no messages in context");
+     }
+     if (context.messages[context.messages.length - 1].role === "assistant") {
+-        throw new Error("Cannot continue from message role: assistant");
++        console.error("[PI-DEBUG3-TOPLOOP] top-level agent-loop assistant-leaf throw:", new Error("trace").stack);
++        throw new Error("Cannot continue from message role: assistant @@PISTACK@@ " + new Error("t").stack);
+     }
+     const stream = createAgentStream();
+     void runAgentLoopContinue(context, config, async (event) => {
+@@ -59,7 +60,8 @@ export async function runAgentLoopContinue(context, config, emit, signal, stream
+         throw new Error("Cannot continue: no messages in context");
+     }
+     if (context.messages[context.messages.length - 1].role === "assistant") {
+-        throw new Error("Cannot continue from message role: assistant");
++        console.error("[PI-DEBUG3-TOPLOOP] top-level agent-loop assistant-leaf throw:", new Error("trace").stack);
++        throw new Error("Cannot continue from message role: assistant @@PISTACK@@ " + new Error("t").stack);
+     }
+     const newMessages = [];
+     const currentContext = { ...context };
+diff --git a/node_modules/@earendil-works/pi-agent-core/dist/agent.js b/node_modules/@earendil-works/pi-agent-core/dist/agent.js
+index 4b1fae0..66ab107 100644
+--- a/node_modules/@earendil-works/pi-agent-core/dist/agent.js
++++ b/node_modules/@earendil-works/pi-agent-core/dist/agent.js
+@@ -241,7 +241,8 @@ export class Agent {
+                 await this.runPromptMessages(queuedFollowUps);
+                 return;
+             }
+-            throw new Error("Cannot continue from message role: assistant");
++            console.error("[PI-DEBUG3-TOPAGENT] top-level agent.continue assistant-leaf throw:", new Error("trace").stack);
++            throw new Error("Cannot continue from message role: assistant @@PISTACK@@ " + new Error("t").stack);
+         }
+         await this.runContinuation();
+     }

@@ -1,0 +1,47 @@
+diff --git a/node_modules/@earendil-works/pi-ai/dist/utils/json-parse.js b/node_modules/@earendil-works/pi-ai/dist/utils/json-parse.js
+index 82e105c..b22141b 100644
+--- a/node_modules/@earendil-works/pi-ai/dist/utils/json-parse.js
++++ b/node_modules/@earendil-works/pi-ai/dist/utils/json-parse.js
+@@ -4,6 +4,26 @@ function isControlCharacter(char) {
+     const codePoint = char.codePointAt(0);
+     return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
+ }
++// PATCH earendil-works/pi-ai#json-parse-nested-quote
++// After an unescaped `"` inside a string, look ahead (skipping whitespace) for a
++// character that can legally follow a JSON string terminator (`,`, `}`, `]`, `:`,
++// or end of input). If found, the quote really does end the string. Otherwise the
++// quote is stray content (e.g. an unescaped quote embedded in model-generated prose
++// or code) and must be escaped so the string continues — without this check every
++// bare `"` unconditionally ended the string, so a single unescaped quote anywhere
++// inside a large/nested field silently truncated that field and dropped every
++// sibling key parsed afterward once JSON.parse fell through to the lenient
++// partial-json fallback.
++function isJsonStringTerminator(json, index) {
++    let cursor = index + 1;
++    while (cursor < json.length && /\s/.test(json[cursor])) {
++        cursor += 1;
++    }
++    if (cursor >= json.length) {
++        return true;
++    }
++    return json[cursor] === "," || json[cursor] === "}" || json[cursor] === "]" || json[cursor] === ":";
++}
+ function escapeControlCharacter(char) {
+     switch (char) {
+         case "\b":
+@@ -38,8 +58,13 @@ export function repairJson(json) {
+             continue;
+         }
+         if (char === '"') {
+-            repaired += char;
+-            inString = false;
++            // PATCH earendil-works/pi-ai#json-parse-nested-quote
++            if (isJsonStringTerminator(json, index)) {
++                repaired += char;
++                inString = false;
++                continue;
++            }
++            repaired += '\\"';
+             continue;
+         }
+         if (char === "\\") {

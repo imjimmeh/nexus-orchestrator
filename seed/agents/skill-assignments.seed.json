@@ -1,0 +1,29 @@
+{
+  "architect-agent": [
+    "architecture-review",
+    "implementation-planning",
+    "software-architect"
+  ],
+  "product-manager": [
+    "product-requirements-refinement",
+    "write-a-prd",
+    "prd-to-issues"
+  ],
+  "qa_automation": ["qa-regression-check"],
+  "ceo-agent": [
+    "project-analysis",
+    "decision-records",
+    "orchestration-patterns",
+    "orchestrator-steering",
+    "first-run",
+    "imported-repo-bootstrap",
+    "imported-repo-synthesis-and-hydration",
+    "existing-project-investigation",
+    "spec-generation",
+    "micro-planning",
+    "work-item-generation",
+    "project-state-review",
+    "next-cycle-planning",
+    "triage-and-recovery"
+  ]
+}

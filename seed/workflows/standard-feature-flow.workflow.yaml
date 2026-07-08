@@ -1,0 +1,170 @@
+workflow_id: standard_feature_flow
+name: Standard Feature Flow
+description: >
+  Blueprint workflow for standard delivery: discovery, spec refinement,
+  implementation, automated QA, and review.   Input contract requires
+  scopeId, objective, and requested_by.
+
+trigger:
+  type: manual
+  name: standard_feature_flow
+  launch:
+    context: scope
+    allow_raw_json: true
+    inputs:
+      - key: objective
+        label: Objective
+        description: High-level delivery objective for this feature effort.
+        type: string
+        required: true
+      - key: requested_by
+        label: Requested By
+        description: Human or system requesting this run.
+        type: string
+        required: true
+      - key: orchestrationId
+        label: Orchestration ID
+        description: Optional orchestration thread identifier.
+        type: string
+        required: false
+      - key: scope_boundaries
+        label: Scope Boundaries
+        description: Optional scope constraints to keep the effort bounded.
+        type: string
+        required: false
+      - key: risk_level
+        label: Risk Level
+        description: Optional risk indicator for QA and review depth.
+        type: string
+        required: false
+      - key: artifact_paths
+        label: Artifact Paths
+        description: Optional list of paths to prioritize during quality checks.
+        type: string_array
+        required: false
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: invoke_workflow
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: run_discovery
+    type: invoke_workflow
+    tier: heavy
+    workflow_id: project_discovery_ceo
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      goals: "{{ trigger.objective }}"
+      stateSummary: "{{ trigger.scope_boundaries }}"
+
+  - id: emit_discovery_completed
+    type: emit_event
+    tier: light
+    depends_on: [run_discovery]
+    inputs:
+      event_name: StandardFeatureFlowStageCompletedEvent
+      payload:
+        event: StandardFeatureFlowStageCompletedEvent
+        stage: discovery
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+
+  - id: run_spec_revision
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [run_discovery]
+    workflow_id: project_spec_revision_ceo
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      goals: "{{ trigger.objective }}"
+      feedback: "Standard feature blueprint refinement for objective: {{ trigger.objective }}"
+
+  - id: emit_spec_completed
+    type: emit_event
+    tier: light
+    depends_on: [run_spec_revision]
+    inputs:
+      event_name: StandardFeatureFlowStageCompletedEvent
+      payload:
+        event: StandardFeatureFlowStageCompletedEvent
+        stage: specification
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+
+  - id: run_implementation
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [run_spec_revision]
+    workflow_id: project_work_item_generation_ceo
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      goals: "{{ trigger.objective }}"
+
+  - id: emit_implementation_completed
+    type: emit_event
+    tier: light
+    depends_on: [run_implementation]
+    inputs:
+      event_name: StandardFeatureFlowStageCompletedEvent
+      payload:
+        event: StandardFeatureFlowStageCompletedEvent
+        stage: implementation
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+
+  - id: run_quality_gate
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [run_implementation]
+    workflow_id: automated_quality_check
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      objective: "{{ trigger.objective }}"
+      requested_by: "{{ trigger.requested_by }}"
+      risk_level: "{{ trigger.risk_level }}"
+      scope_boundaries: "{{ trigger.scope_boundaries }}"
+      artifact_paths: "{{ trigger.artifact_paths }}"
+
+  - id: run_review_gate
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [run_quality_gate]
+    workflow_id: project_orchestration_refinement_ceo
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      goals: "{{ trigger.objective }}"
+      reason: "standard_feature_flow_review"
+      stateSummary: "Quality gate complete. Requested by {{ trigger.requested_by }}."
+
+  - id: emit_standard_feature_flow_completed
+    type: emit_event
+    tier: light
+    depends_on: [run_review_gate]
+    inputs:
+      event_name: StandardFeatureFlowCompletedEvent
+      payload:
+        event: StandardFeatureFlowCompletedEvent
+        blueprint_type: standard_feature_flow
+        terminal_outcome: completed
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        objective: "{{ trigger.objective }}"
+        requested_by: "{{ trigger.requested_by }}"

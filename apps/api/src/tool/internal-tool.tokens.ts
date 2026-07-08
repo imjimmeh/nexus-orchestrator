@@ -1,0 +1,1 @@
+export const INTERNAL_TOOL_HANDLER = Symbol('INTERNAL_TOOL_HANDLER');

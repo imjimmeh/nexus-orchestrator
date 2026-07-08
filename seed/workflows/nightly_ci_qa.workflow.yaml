@@ -1,0 +1,143 @@
+workflow_id: nightly_ci_qa
+name: Nightly CI/QA
+description: >
+  Automated nightly quality gate for a project scope. Runs lint and test checks,
+  then if failures are found, provisions a fix branch, has an agent fix the issues,
+  commits fixes, and auto-merges to main. If all checks pass, emits a success
+  event without any branch operations.
+
+trigger:
+  type: manual
+  launch:
+    context: scope
+    inputs:
+      - key: scopeId
+        label: Project Scope ID
+        type: string
+        required: true
+        description: The project scope to run CI/QA checks against.
+
+concurrency:
+  max_runs: 1
+  scope: "{{ trigger.scopeId }}"
+  on_conflict: skip
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: run_checks
+    type: execution
+    tier: heavy
+    output_contract:
+      required: [pass_fail_status, issue_summary]
+      types:
+        pass_fail_status: string
+        issue_summary: string
+    inputs:
+      agent_profile: qa_automation
+    steps:
+      - id: validate
+        prompt_file: prompts/nightly-ci-qa/run-checks.md
+
+  - id: provision_branch
+    type: git_operation
+    tier: light
+    depends_on: [run_checks]
+    condition: "{{#if (eq jobs.run_checks.output.pass_fail_status 'fail')}}true{{else}}false{{/if}}"
+    inputs:
+      action: provision_worktree
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "nightly-ci-{{ trigger.scheduledRunId }}"
+      base_branch: main
+      target_branch: "nightly-ci-fix/{{ trigger.scheduledRunId }}"
+
+  - id: fix_issues
+    type: execution
+    tier: heavy
+    depends_on: [provision_branch]
+    condition: "{{#if (eq jobs.run_checks.output.pass_fail_status 'fail')}}true{{else}}false{{/if}}"
+    inputs:
+      agent_profile: senior_dev
+    max_step_loops: 3
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: edit
+          - effect: allow
+            tool: write
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+    steps:
+      - id: fix
+        prompt_file: prompts/nightly-ci-qa/fix-issues.md
+      - id: commit
+        type: run_command
+        command: |
+          git add -A
+          if git diff --cached --quiet; then echo "no-changes"; else git commit -m "fix(nightly-ci): resolve lint/test failures" && echo "committed"; fi
+        working_dir: /workspace
+        transitions:
+          - condition: steps.commit.output.ok == true
+            next: merge_to_main
+          - condition: steps.commit.output.ok == false
+            next: fail_job
+      - id: merge_to_main
+        type: run_command
+        command: |
+          git checkout "{{ jobs.provision_branch.output.base_branch }}" && git merge --no-ff "{{ jobs.provision_branch.output.target_branch }}" -m "merge(nightly-ci): auto-merge CI fixes to main"
+        working_dir: /workspace
+        transitions:
+          - condition: steps.merge_to_main.output.ok == true
+            next: done
+          - condition: steps.merge_to_main.output.ok == false
+            next: fail_job
+
+  - id: emit_ci_complete
+    type: emit_event
+    tier: light
+    depends_on: [run_checks]
+    inputs:
+      event_name: NightlyCICompletedEvent
+      payload:
+        event: NightlyCICompletedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        pass_fail_status: "{{ jobs.run_checks.output.pass_fail_status }}"

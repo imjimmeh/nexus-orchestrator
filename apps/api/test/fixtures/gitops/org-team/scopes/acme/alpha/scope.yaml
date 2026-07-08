@@ -1,0 +1,6 @@
+apiVersion: nexus.gitops/v1
+kind: ScopeNode
+type: team
+name: Alpha
+slug: alpha
+metadata: null

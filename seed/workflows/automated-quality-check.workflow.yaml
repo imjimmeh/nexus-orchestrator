@@ -1,0 +1,83 @@
+workflow_id: automated_quality_check
+name: Automated Quality Check
+description: >
+  Event-driven and reusable QA building block for project validation. Detects
+  project tooling, runs targeted quality checks, and emits a completion event.
+
+trigger:
+  type: event
+  name: QualityCheckRequestedEvent
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: remember
+
+jobs:
+  - id: quality_check
+    type: execution
+    tier: heavy
+    output_contract:
+      required: [summary, pass_fail_status]
+    inputs:
+      agent_profile: qa_automation
+      objective: "{{ trigger.objective }}"
+      requested_by: "{{ trigger.requested_by }}"
+      risk_level: "{{ trigger.risk_level }}"
+      scope_boundaries: "{{ trigger.scope_boundaries }}"
+      artifact_paths: "{{ trigger.artifact_paths }}"
+    steps:
+      - id: validate_changes
+        prompt: |
+          Run automated quality checks for project {{trigger.scopeId}}.
+
+          Input contract:
+          - objective: {{inputs.objective}}
+          - requested_by: {{inputs.requested_by}}
+          - risk_level: {{inputs.risk_level}}
+          - scope_boundaries: {{inputs.scope_boundaries}}
+          - artifact_paths: {{json inputs.artifact_paths}}
+
+          Required behavior:
+          1) Check for `AGENTS.md` in the workspace.
+             - If it exists, execute the commands defined in it.
+             - If it does not exist, attempt to auto-detect the project type:
+               - If `package.json` exists: run `npm test`, and `npm run lint` if present.
+               - If `requirements.txt` or `pyproject.toml` exists: run `pytest` or `ruff check` if available.
+               - If `go.mod` exists: run `go test ./...`.
+          2) Execute targeted checks for changed scope before broad suites when possible.
+          3) Summarize pass/fail status and highest-risk findings.
+          4) Call set_job_output with your results:
+             {"data": {"pass_fail_status": "pass|fail", "summary": "concise QA summary"}}
+
+  - id: emit_quality_check_completed
+    type: emit_event
+    tier: light
+    depends_on: [quality_check]
+    inputs:
+      event_name: AutomatedQualityCheckCompletedEvent
+      payload:
+        event: AutomatedQualityCheckCompletedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        objective: "{{ trigger.objective }}"
+        requested_by: "{{ trigger.requested_by }}"
+        risk_level: "{{ trigger.risk_level }}"

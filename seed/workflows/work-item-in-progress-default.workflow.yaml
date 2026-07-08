@@ -1,0 +1,573 @@
+workflow_id: work_item_in_progress_default
+strict_dependencies: true
+name: Work Item In-Progress Default Implementation
+description: |
+  Core default workflow that automatically starts an implementation session whenever a work item moves to in-progress. After implementation, it verifies all changes are committed (looping until clean), then automatically transitions the work item to in-review.
+trigger:
+  type: event
+  event: kanban.work_item.status_changed.v1
+  condition: "{{#if (eq trigger.status 'in-progress')}}true{{else}}false{{/if}}"
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: yield_session
+      - effect: allow
+        tool: open_war_room
+      - effect: allow
+        tool: invite_war_room_participant
+      - effect: allow
+        tool: post_war_room_message
+      - effect: allow
+        tool: close_war_room
+      - effect: allow
+        tool: spawn_subagent_async
+      - effect: allow
+        tool: wait_for_subagents
+      - effect: allow
+        tool: kanban.publish_specs
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+jobs:
+  - id: provision_worktree
+    type: git_operation
+    tier: light
+    inputs:
+      action: provision_worktree
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: "{{ trigger.resource.executionConfig.baseBranch }}"
+      target_branch: "{{ trigger.resource.executionConfig.targetBranch }}"
+  - id: persist_provisioned_branch
+    type: mcp_tool_call
+    tier: light
+    needs:
+      - provision_worktree
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_execution_config
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        executionConfigPatch:
+          baseBranch: "{{ jobs.provision_worktree.output.base_branch }}"
+          targetBranch: "{{ jobs.provision_worktree.output.target_branch }}"
+          worktreePath: "{{ jobs.provision_worktree.output.worktree_path }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: plan_implementation
+    type: execution
+    tier: heavy
+    needs:
+      - provision_worktree
+    metadata:
+      planning_mode: fallback_only
+    condition: "{{#if (and (eq trigger.resource.storyPoints 13) (not trigger.resource.executionConfig.implementationPlan))}}true{{else}}false{{/if}}"
+    inputs:
+      agent_profile: architect-agent
+    output_contract:
+      required:
+        - plan
+      types:
+        plan: object
+    max_step_loops: 1
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: yield_session
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: invite_war_room_participant
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: plan
+        type: agent
+        prompt: |
+          You are a planning agent. Analyze the work item spec and the current codebase,
+          then produce a structured implementation plan.
+
+          Scope ID: {{trigger.scopeId}}
+          Context ID: {{trigger.contextId}}
+
+          Read the spec carefully. Explore the codebase structure to understand:
+          - Which files/modules need to be created or modified
+          - How the deliverables relate to each other
+          - What order tasks should be executed in
+          - Which tasks can be delegated to subagents vs done by the orchestrator
+
+          Use context:
+          - Title: {{trigger.resource.title}}
+          - Description: {{trigger.resource.description}}
+          - Type: {{trigger.resource.type}}
+          - Story Points: {{trigger.resource.storyPoints}}
+
+          Do NOT write any code. Only plan.
+          When your plan is ready, call set_job_output with a FULLY POPULATED plan object:
+          {
+            "plan": {
+              "milestones": [
+                {
+                  "name": "...",
+                  "tasks": [
+                    {
+                      "id": "1.1",
+                      "description": "...",
+                      "satisfies": ["AC-N"],
+                      "target_files": ["exact/path/to/file.ts"],
+                      "verification": "concrete, independently testable criterion"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+          NEVER pass an empty object as the plan. Every milestone must have at least one task.
+          Then call `step_complete`.
+  - id: persist_plan
+    type: mcp_tool_call
+    tier: light
+    needs:
+      - job: plan_implementation
+        result: success_or_skipped
+    condition: "{{#if jobs.plan_implementation.output.plan}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_update
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        updates:
+          implementationPlan: "{{ jobs.plan_implementation.output.plan }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: check_repeated_failures
+    type: execution
+    tier: heavy
+    needs:
+      - provision_worktree
+    condition: "{{#if trigger.resource.executionConfig.rejectionFeedback.failedDeliverables}}true{{else}}false{{/if}}"
+    output_contract:
+      required:
+        - should_escalate
+      optional:
+        - repeated_acs
+      types:
+        should_escalate: boolean
+        repeated_acs: array
+    max_step_loops: 1
+    inputs:
+      agent_profile: qa_automation
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: yield_session
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: invite_war_room_participant
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: remember
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: check_escalation
+        type: agent
+        prompt: |
+          Decide whether this work item should be escalated after repeated
+          acceptance-criteria failures. Always finish by calling set_job_output
+          then step_complete.
+
+          Current failed ACs from the latest rejection (authoritative source,
+          always available from the DB-backed trigger):
+          {{json trigger.resource.executionConfig.rejectionFeedback.failedDeliverables}}
+
+          Optional extra context — the published spec file, if one exists:
+          {{#if trigger.resource.metadata.workItemMarkdownPath}}
+          A spec file MAY exist at {{trigger.resource.metadata.workItemMarkdownPath}}.
+          Try to read it once for its `## Review History` section, which records how
+          many consecutive prior rounds each AC has failed.
+
+          If the spec file is missing or cannot be read (e.g. ENOENT — common for
+          items published without committing the markdown):
+          do not retry the read. Treat it as "no prior review history available"
+          and decide from the rejection feedback above alone.
+          {{else}}
+          No spec file path is recorded for this work item. Decide from the rejection
+          feedback above alone; there is no prior review history to consult.
+          {{/if}}
+
+          Decision rule:
+          - If review history is available AND any AC has appeared as FAIL in 2 or
+            more consecutive prior rounds AND is still failing now, call set_job_output
+            with: { "should_escalate": true, "repeated_acs": ["AC-N", "AC-N"] }
+          - Otherwise (including when no review history is available), call
+            set_job_output with: { "should_escalate": false, "repeated_acs": [] }
+
+          Then call `step_complete`.
+  - id: escalate_to_needs_rework
+    type: mcp_tool_call
+    tier: light
+    needs:
+      - job: check_repeated_failures
+        result: success
+    condition: "{{#if (bool jobs.check_repeated_failures.output.should_escalate)}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          escalation:
+            reason: repeated_ac_failure
+            repeated_acs: "{{ jobs.check_repeated_failures.output.repeated_acs }}"
+            escalatedAt: "{{ trigger.timestamp }}"
+            recommendation: fresh_architect_pass
+            replanAttempts: 0
+          refinement:
+            retroactiveRefinementRequired: true
+            lastOutcome: needs_rework
+            reRequestedAt: "{{ trigger.timestamp }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: transition_to_needs_rework
+    type: mcp_tool_call
+    tier: light
+    needs:
+      - job: escalate_to_needs_rework
+        result: success
+    condition: "{{#if (bool jobs.check_repeated_failures.output.should_escalate)}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        status: blocked
+        origin: workflow
+        actorType: system
+        actorId: work_item_in_progress_default
+        trigger: transition_to_needs_rework
+        reasonCode: repeated_ac_failure
+        reason: Escalated to needs rework after repeated acceptance-criteria failures
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: delta_replan
+    type: execution
+    tier: heavy
+    needs:
+      - job: provision_worktree
+        result: success
+      - job: check_repeated_failures
+        result: success_or_skipped
+    condition: "{{#if (and trigger.resource.executionConfig.implementationPlan trigger.resource.executionConfig.rejectionFeedback.failedDeliverables (not (bool jobs.check_repeated_failures.output.should_escalate)))}}true{{else}}false{{/if}}"
+    inputs:
+      agent_profile: architect-agent
+    output_contract:
+      required:
+        - plan
+      types:
+        plan: object
+    max_step_loops: 1
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: yield_session
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: invite_war_room_participant
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: plan_delta
+        type: agent
+        prompt_file: prompts/work-item-in-progress-default/delta-replan.md
+  - id: persist_delta_plan
+    type: mcp_tool_call
+    tier: light
+    needs:
+      - job: delta_replan
+        result: success_or_skipped
+    condition: "{{#if jobs.delta_replan.output.plan}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_update
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        updates:
+          implementationPlan: "{{ jobs.delta_replan.output.plan }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: war_room_plan_alignment
+    type: execution
+    tier: heavy
+    needs:
+      - job: plan_implementation
+        result: success_or_skipped
+      - job: persist_plan
+        result: success_or_skipped
+      - job: delta_replan
+        result: success_or_skipped
+      - job: persist_delta_plan
+        result: success_or_skipped
+    condition: "{{#if (and (not (bool jobs.check_repeated_failures.output.should_escalate)) (or (eq trigger.resource.storyPoints 13) jobs.delta_replan.output.plan))}}true{{else}}false{{/if}}"
+    inputs:
+      agent_profile: architect-agent
+    max_step_loops: 4
+    max_retries: 1
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: spawn_subagent_async
+          - effect: allow
+            tool: wait_for_subagents
+          - effect: allow
+            tool: update_war_room_blackboard
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: write
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: submit_war_room_signoff
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: get_war_room_state
+          - effect: deny
+            tool: bash
+    steps:
+      - id: align_implementation
+        type: agent
+        prompt_file: prompts/work-item-in-progress-default/war-room-align.md
+  - id: implement_and_commit
+    type: execution
+    tier: heavy
+    needs:
+      - job: plan_implementation
+        result: success_or_skipped
+      - job: persist_plan
+        result: success_or_skipped
+      - job: delta_replan
+        result: success_or_skipped
+      - job: persist_delta_plan
+        result: success_or_skipped
+      - job: war_room_plan_alignment
+        result: success_or_skipped
+    condition: "{{#if (bool jobs.check_repeated_failures.output.should_escalate)}}false{{else}}true{{/if}}"
+    max_step_loops: 3
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: yield_session
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: invite_war_room_participant
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: spawn_subagent_async
+          - effect: allow
+            tool: wait_for_subagents
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: delegate_ui_ux_testing
+          - effect: allow
+            tool: delegate_web_research
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: edit
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: query_memory
+          - effect: deny
+            tool: kanban.publish_specs
+    inputs:
+      agent_profile: orchestrator
+    steps:
+      - id: implement
+        type: agent
+        prompt_file: prompts/work-item-in-progress-default/implement.md
+      - id: check_uncommitted
+        type: run_command
+        command: git status --porcelain
+        working_dir: /workspace
+        transitions:
+          - condition: steps.check_uncommitted.output.ok == true && steps.check_uncommitted.output.stdout != ''
+            next: commit
+          - condition: steps.check_uncommitted.output.ok == true && steps.check_uncommitted.output.stdout == ''
+            next: done
+          - condition: steps.check_uncommitted.output.ok == false
+            next: fail_job
+      - id: commit
+        type: agent
+        prompt_file: prompts/work-item-in-progress-default/commit.md
+        transitions:
+          - condition: steps.commit.output.ok == true
+            next: check_uncommitted
+          - condition: steps.commit.output.ok == false
+            next: fail_job
+  - id: transition_to_review
+    type: mcp_tool_call
+    tier: light
+    needs:
+      - job: implement_and_commit
+        result: success
+    condition: "{{#if (bool jobs.check_repeated_failures.output.should_escalate)}}false{{else}}true{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_transition_status
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        status: in-review
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list

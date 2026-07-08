@@ -1,0 +1,100 @@
+# Prompt Contract Test Workflow
+# Validates that workflow prompts do not reference tools that are not permitted
+# in the job's allow_tools list.
+
+workflow_id: prompt_contract_test
+name: Prompt Contract Test
+description: >
+  Validates workflow prompts for tool permission consistency.
+  Ensures that tools referenced in prompts are listed in the job's allow_tools.
+  Also checks for invalid patterns like tier field in spawn_subagent_async.
+
+trigger:
+  type: manual
+
+permissions:
+  allow_tools:
+    - bash
+    - read
+    - step_complete
+    - set_job_output
+  deny_tools: []
+
+jobs:
+  - id: validate_tool_permissions
+    type: execution
+    tier: light
+    output_contract:
+      required:
+        - validation_results
+        - violations_count
+        - tier_violations_count
+        - passed
+      optional:
+        - violations
+        - tier_violations
+    inputs:
+      agent_profile: qa_automation
+    permissions:
+      allow_tools:
+        - read
+        - bash
+        - step_complete
+        - set_job_output
+        - ls
+    deny_tools: []
+    steps:
+      - id: validate
+        type: agent
+        prompt: |
+          Run the prompt contract test to validate workflow tool permissions.
+
+          1. Run the Python test: `python seed/tests/prompt_contract_test.py`
+          2. Run the Node.js test: `node seed/tests/prompt_contract_test.js`
+
+          Parse the output of both tests to determine:
+          - How many tool permission mismatches were found
+          - How many tier field violations were found
+          - Whether both tests passed
+
+          If both tests pass (exit code 0), set:
+          - passed: true
+          - violations_count: 0
+          - tier_violations_count: 0
+          - validation_results: "All workflow prompts are consistent with their tool permissions"
+
+          If either test fails (exit code non-zero), parse the violation details and set:
+          - passed: false
+          - violations_count: <number from Python test output>
+          - tier_violations_count: <number from tier test output>
+          - validation_results: <failure summary from test output>
+          - violations: <array of tool permission violations>
+          - tier_violations: <array of tier field violations>
+
+          Call set_job_output with the validation results.
+
+      - id: report
+        type: agent
+        prompt: |
+          Report the final validation results.
+
+          Job output contains:
+          - passed: boolean
+          - violations_count: number
+          - tier_violations_count: number
+          - validation_results: string
+          - violations: array (if any)
+          - tier_violations: array (if any)
+
+          If passed is true:
+          - Print "✅ Prompt Contract Test: PASSED"
+          - Print "No tool permission mismatches found"
+          - Print "No tier field violations found"
+
+          If passed is false:
+          - Print "❌ Prompt Contract Test: FAILED"
+          - Print "Tool permission mismatches: {{jobs.validate_tool_permissions.output.violations_count}}"
+          - Print "Tier field violations: {{jobs.validate_tool_permissions.output.tier_violations_count}}"
+          - List each violation from the output
+
+          Then call step_complete.

@@ -1,0 +1,26 @@
+{
+  "name": "sysadmin-repair",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "deny step_complete *",
+      "deny spawn_subagent_async *",
+      "deny kanban.publish_specs *",
+      "deny submit_qa_decision *",
+      "allow read *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow bash *",
+      "allow write *",
+      "allow edit *",
+      "allow set_job_output *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *"
+    ]
+  },
+  "assigned_skills": [],
+  "is_active": true
+}

@@ -1,0 +1,3 @@
+apiVersion: nexus.gitops/v1
+kind: AssignmentList
+assignments: []

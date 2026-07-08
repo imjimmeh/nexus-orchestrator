@@ -1,0 +1,20 @@
+{
+  "name": "retrospective-analyst",
+  "tier_preference": "light",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow ls *",
+      "allow find *",
+      "allow grep *",
+      "allow query_memory *",
+      "allow search_skills *",
+      "allow get_capabilities *",
+      "allow set_job_output *",
+      "allow step_complete *"
+    ]
+  },
+  "assigned_skills": ["debugging"],
+  "is_active": true
+}

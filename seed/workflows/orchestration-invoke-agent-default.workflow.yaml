@@ -1,0 +1,166 @@
+workflow_id: orchestration_invoke_agent_default
+name: Orchestration Invoke Agent Default
+description: |
+  Generic delegation workflow used by orchestration to invoke any agent profile without creating one workflow per agent.
+concurrency:
+  max_runs: 1
+  scope: "{{ trigger.dedupeKey }}"
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: web_search
+      - effect: allow
+        tool: web_fetch
+      - effect: allow
+        tool: get_capabilities
+      - effect: allow
+        tool: get_agent_profiles
+      - effect: allow
+        tool: spawn_subagent_async
+      - effect: allow
+        tool: wait_for_subagents
+      - effect: allow
+        tool: check_subagent_status
+      - effect: allow
+        tool: create_delegation_contract
+      - effect: allow
+        tool: get_delegation_contract
+      - effect: allow
+        tool: cancel_delegation_contract
+      - effect: allow
+        tool: dispatch_delegation_contracts
+      - effect: allow
+        tool: sweep_delegation_timeouts
+      - effect: allow
+        tool: get_delegation_replay
+      - effect: allow
+        tool: create_tool_candidate
+      - effect: allow
+        tool: validate_tool_candidate
+      - effect: allow
+        tool: publish_tool_candidate
+      - effect: allow
+        tool: upsert_tool
+      - effect: allow
+        tool: create_skill
+      - effect: allow
+        tool: update_skill
+      - effect: allow
+        tool: list_skill_files
+      - effect: allow
+        tool: upsert_skill_file
+      - effect: allow
+        tool: delete_skill_file
+      - effect: allow
+        tool: replace_profile_skills
+      - effect: allow
+        tool: add_profile_skills
+      - effect: allow
+        tool: remove_profile_skills
+      - effect: allow
+        tool: save_script_as_skill
+      - effect: allow
+        tool: create_artifact
+      - effect: allow
+        tool: list_artifacts
+      - effect: allow
+        tool: list_artifact_files
+      - effect: allow
+        tool: upsert_artifact_file
+      - effect: allow
+        tool: delete_artifact_file
+      - effect: allow
+        tool: save_script_as_artifact
+      - effect: allow
+        tool: browser_open_page
+      - effect: allow
+        tool: browser_navigate
+      - effect: allow
+        tool: browser_click
+      - effect: allow
+        tool: browser_type
+      - effect: allow
+        tool: browser_wait_for
+      - effect: allow
+        tool: browser_read_page
+      - effect: allow
+        tool: browser_screenshot
+      - effect: allow
+        tool: browser_close_page
+      - effect: allow
+        tool: browser_list_failure_artifacts
+      - effect: allow
+        tool: browser_get_failure_artifact
+      - effect: allow
+        tool: validate_specs
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: ls
+jobs:
+  - id: delegate
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - summary
+        - resource_specs_changed
+        - resource_spec_paths
+    inputs:
+      agent_profile: "{{ trigger.agent_profile }}"
+    steps:
+      - id: delegated_task
+        prompt_mode: append
+        prompt: |
+          --- DELEGATED TASK ---
+          Scope: {{trigger.scopeId}}
+
+          Objective:
+          {{#if trigger.objective}}{{trigger.objective}}{{else}}{{#if trigger.message}}{{trigger.message}}{{else}}No explicit objective was provided. Review available context and proceed with best effort.{{/if}}{{/if}}
+
+          {{#if trigger.task_prompt}}
+          Task instructions:
+          {{trigger.task_prompt}}
+          {{/if}}
+
+          When using edit tools, pass native tool arguments. Do not pass JSON strings for object or array parameters such as `edits`.
+
+          Before calling `step_complete`, you MUST call `set_job_output` with all required fields:
+          - summary: string
+          - resource_specs_changed: boolean true/false - set true only when resource spec files were created or modified
+          - resource_spec_paths: string[] — include only changed resource spec paths, or [] if none
+
+          Call set_job_output with data as a native object, not a JSON string:
+          data: { summary: "...", resource_specs_changed: false, resource_spec_paths: [] }
+
+          Do not set `resource_specs_changed` to true for unrelated docs, SDD, ADR, source code, analysis, or prompt-only changes.
+
+          **CRITICAL - Explicit no-spec outcomes:** If no resource specs changed (resource_specs_changed: false), your summary MUST explicitly state:
+          - Whether the task was research-only, blocked, complete-with-no-output, or another outcome
+          - What a parent orchestration cycle should do next based on this outcome
+
+          Example for research-only: "Research completed. No new resource specs needed; findings recorded in analysis doc. Next: review analysis and decide on implementation direction."
+          Example for blocked: "Investigation blocked by missing access to external system. Requires manual intervention. Next: request system access before retry."
+
+          Do not call `step_complete` until `set_job_output` succeeds.

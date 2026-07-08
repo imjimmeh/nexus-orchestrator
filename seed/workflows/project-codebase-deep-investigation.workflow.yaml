@@ -1,0 +1,236 @@
+workflow_id: project_codebase_deep_investigation
+name: Project Codebase Deep Investigation
+description: |
+  Performs structured, scope-partitioned investigation of an imported repository. An Investigation Coordinator identifies codebase scopes and writes the project knowledge base stub, then dispatches bounded batches of independent, non-overlapping Investigation Subagent probes while keeping dependent or overlapping scopes serialized. Each subagent reads implementation files and tests, writes a per-scope probe result file under docs/project-context/probe-results/, and returns a lightweight completion signal. Parent finalization validates probe files, merges findings into aggregate project-context docs, and commits all artifacts through git_operation: commit_paths.
+inputs:
+  mode:
+    type: string
+    enum:
+      - full
+      - refresh
+    default: full
+    description: |
+      full performs a complete scope-partitioned rescan. refresh delta-probes only
+      scopes changed since the last discovery (commits/merges since lastDiscoveryAt).
+trigger:
+  type: manual
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: "*"
+jobs:
+  - id: coordinate_investigation
+    type: execution
+    tier: heavy
+    max_retries: 2
+    retry_prompt: |
+      You ended your turn without a complete job output. Call set_job_output now as
+      your final action, passing a plain object with both required fields:
+      scope_manifest (an array of scope objects) and knowledge_base_initialized (true).
+    output_contract:
+      required:
+        - scope_manifest
+        - knowledge_base_initialized
+      types:
+        scope_manifest:
+          type: array
+          items:
+            type: object
+        knowledge_base_initialized: boolean
+    inputs:
+      agent_profile: investigation-coordinator
+      resolved_repo_path: "{{ trigger.resolvedRepoPath }}"
+      goals: "{{ trigger.goals }}"
+      scope_id: "{{ trigger.scopeId }}"
+      mode: "{{ trigger.mode }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: grep
+          - effect: allow
+            tool: find
+          - effect: allow
+            tool: write
+          - effect: allow
+            tool: edit
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.orchestration_timeline
+          - effect: allow
+            tool: kanban.orchestration_activity
+          - effect: deny
+            tool: step_complete
+          - effect: deny
+            tool: spawn_subagent_async
+          - effect: deny
+            tool: submit_resource_artifact
+          - effect: deny
+            tool: ask_user_questions
+          - effect: deny
+            tool: bash
+    steps:
+      - id: coordinate
+        prompt_file: prompts/project-codebase-deep-investigation/coordinator.md
+  - id: run_scope_probes
+    type: execution
+    tier: heavy
+    max_retries: 2
+    retry_prompt: |
+      You ended your turn without a complete job output. Call set_job_output now as
+      your final action, passing a plain object with all required fields:
+      probes_completed, probes_failed, and probe_artifact_paths.
+    depends_on:
+      - coordinate_investigation
+    output_contract:
+      required:
+        - probes_completed
+        - probes_failed
+        - probe_artifact_paths
+      types:
+        probes_completed: integer
+        probes_failed: integer
+        probe_artifact_paths: array
+    inputs:
+      agent_profile: investigation-coordinator
+      scope_manifest: "{{ jobs.coordinate_investigation.output.scope_manifest }}"
+      scope_id: "{{ trigger.scopeId }}"
+      orchestration_id: "{{ trigger.orchestrationId }}"
+      resolved_repo_path: "{{ trigger.resolvedRepoPath }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: grep
+          - effect: allow
+            tool: find
+          - effect: allow
+            tool: write
+          - effect: allow
+            tool: edit
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.orchestration_timeline
+          - effect: allow
+            tool: kanban.orchestration_activity
+          - effect: allow
+            tool: spawn_subagent_async
+          - effect: allow
+            tool: wait_for_subagents
+          - effect: allow
+            tool: check_subagent_status
+          - effect: deny
+            tool: ask_user_questions
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: submit_resource_artifact
+    steps:
+      - id: probe_loop
+        prompt_file: prompts/project-codebase-deep-investigation/probe-loop.md
+  - id: finalize_investigation_artifacts
+    type: execution
+    tier: heavy
+    max_retries: 2
+    retry_prompt: |
+      You ended your turn without a complete job output. Call set_job_output now as
+      your final action, passing a plain object with all required fields:
+      probe_artifact_paths, investigation_summary_path, valid_probe_artifact_count,
+      and failed_probe_artifact_count.
+    depends_on:
+      - run_scope_probes
+    output_contract:
+      required:
+        - probe_artifact_paths
+        - investigation_summary_path
+        - valid_probe_artifact_count
+        - failed_probe_artifact_count
+      types:
+        probe_artifact_paths: array
+        investigation_summary_path: string
+        valid_probe_artifact_count: integer
+        failed_probe_artifact_count: integer
+    inputs:
+      agent_profile: investigation-coordinator
+      scope_manifest: "{{ jobs.coordinate_investigation.output.scope_manifest }}"
+      probe_artifact_paths: "{{ jobs.run_scope_probes.output.probe_artifact_paths }}"
+      scope_id: "{{ trigger.scopeId }}"
+      resolved_repo_path: "{{ trigger.resolvedRepoPath }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: grep
+          - effect: allow
+            tool: find
+          - effect: allow
+            tool: write
+          - effect: allow
+            tool: edit
+          - effect: allow
+            tool: kanban.write_probe_result
+          - effect: allow
+            tool: kanban.record_discovery_completed
+          - effect: allow
+            tool: kanban.project_state
+          - effect: deny
+            tool: ask_user_questions
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: step_complete
+          - effect: deny
+            tool: spawn_subagent_async
+          - effect: deny
+            tool: submit_resource_artifact
+    steps:
+      - id: finalize
+        prompt_file: prompts/project-codebase-deep-investigation/finalize-artifacts.md
+  - id: commit_investigation_artifacts
+    type: git_operation
+    tier: light
+    depends_on:
+      - finalize_investigation_artifacts
+    inputs:
+      action: commit_paths
+      repository_id: "{{ trigger.scopeId }}"
+      paths:
+        - docs/project-context
+      message: "docs(discovery): persist imported repository investigation"

@@ -1,0 +1,110 @@
+workflow_id: documentation_audit
+name: Documentation Audit
+description: >
+  Blueprint workflow that audits docs against code and reports categorized drift:
+  missing docs, stale docs, and conflicting docs, with a prioritized remediation plan.
+  Input contract requires scopeId, objective, and requested_by.
+
+trigger:
+  type: manual
+  name: documentation_audit
+  launch:
+    context: scope
+    allow_raw_json: true
+    inputs:
+      - key: objective
+        label: Objective
+        description: Documentation quality objective for this audit.
+        type: string
+        required: true
+      - key: requested_by
+        label: Requested By
+        description: Human or system requesting the documentation audit.
+        type: string
+        required: true
+      - key: orchestrationId
+        label: Orchestration ID
+        description: Optional orchestration thread identifier.
+        type: string
+        required: false
+      - key: artifact_paths
+        label: Artifact Paths
+        description: Optional set of files or folders to prioritize.
+        type: string_array
+        required: false
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: invoke_workflow
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: remember
+
+jobs:
+  - id: audit_docs
+    type: execution
+    tier: heavy
+    output_contract:
+      required: [missing_docs, stale_docs, conflicting_docs, remediation_plan]
+    inputs:
+      agent_profile: staff_engineer
+      objective: "{{ trigger.objective }}"
+      requested_by: "{{ trigger.requested_by }}"
+      artifact_paths: "{{ trigger.artifact_paths }}"
+    steps:
+      - id: run_audit
+        prompt: |
+          Run a documentation drift audit for project {{trigger.scopeId}}.
+
+          Audit objective: {{inputs.objective}}
+          Requested by: {{inputs.requested_by}}
+          Focus artifacts: {{json inputs.artifact_paths}}
+
+          Required audit domains:
+          1) API docs (README/OpenAPI/route docs)
+          2) Architecture docs (docs/architecture)
+          3) Operational runbooks (docs/operations)
+
+          When complete, call set_job_output with all required fields:
+          {
+            "data": {
+              "missing_docs": [...list of missing docs...],
+              "stale_docs": [...list of stale docs...],
+              "conflicting_docs": [...list of conflicting docs...],
+              "remediation_plan": [...prioritized actions with rationale...]
+            }
+          }
+
+          Keep findings actionable and tied to concrete files/paths.
+
+  - id: emit_documentation_audit_completed
+    type: emit_event
+    tier: light
+    depends_on: [audit_docs]
+    inputs:
+      event_name: DocumentationAuditCompletedEvent
+      payload:
+        event: DocumentationAuditCompletedEvent
+        blueprint_type: documentation_audit
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        objective: "{{ trigger.objective }}"
+        requested_by: "{{ trigger.requested_by }}"
+        categories:
+          - missing_docs
+          - stale_docs
+          - conflicting_docs

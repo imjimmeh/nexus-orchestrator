@@ -1,0 +1,176 @@
+workflow_id: codebase_refactoring_analysis
+name: Codebase Refactoring Analysis
+description: >
+  Nightly codebase refactoring analysis. An Investigation Coordinator dispatches
+  subagent probes per module to identify refactoring opportunities, then an
+  Architect agent deduplicates findings against existing work items and creates
+  new work items for novel findings.
+
+trigger:
+  type: manual
+  launch:
+    context: scope
+    inputs:
+      - key: scopeId
+        label: Project Scope ID
+        type: string
+        required: true
+        description: The project scope to analyze for refactoring opportunities.
+
+concurrency:
+  max_runs: 1
+  scope: "{{ trigger.scopeId }}"
+  on_conflict: skip
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: spawn_subagent_async
+      - effect: allow
+        tool: wait_for_subagents
+      - effect: allow
+        tool: check_subagent_status
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.list_work_items
+      - effect: allow
+        tool: kanban.work_item_create
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: step_complete
+
+jobs:
+  - id: scan_codebase
+    type: execution
+    tier: heavy
+    output_contract:
+      required: [refactoring_findings, scope_manifest]
+    inputs:
+      agent_profile: investigation-coordinator
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: spawn_subagent_async
+          - effect: allow
+            tool: wait_for_subagents
+          - effect: allow
+            tool: check_subagent_status
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: bash
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: edit
+          - effect: deny
+            tool: step_complete
+          - effect: deny
+            tool: ask_user_questions
+    steps:
+      - id: coordinate_scan
+        prompt_file: prompts/codebase-refactoring-analysis/coordinator-scan.md
+
+  - id: dedup_and_create
+    type: execution
+    tier: heavy
+    depends_on: [scan_codebase]
+    output_contract:
+      required: [items_created, duplicates_skipped]
+      types:
+        items_created: integer
+        duplicates_skipped: integer
+      # Reject fabricated counts: items_created must equal the number of times
+      # the agent actually succeeded in creating a work item. Guards against the
+      # agent reporting created items it never created (see run a831645d).
+      reconcile:
+        - field: items_created
+          tool: kanban.work_item_create
+    inputs:
+      agent_profile: architect-agent
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.list_work_items
+          - effect: allow
+            tool: kanban.work_item_create
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: edit
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: dedup_create
+        prompt_file: prompts/codebase-refactoring-analysis/dedup-create.md
+
+  - id: commit_findings
+    type: git_operation
+    tier: light
+    depends_on: [dedup_and_create]
+    inputs:
+      action: commit_paths
+      repository_id: "{{ trigger.scopeId }}"
+      paths:
+        - docs/analysis
+      message: "docs(analysis): persist refactoring analysis findings"
+
+  - id: emit_analysis_complete
+    type: emit_event
+    tier: light
+    depends_on: [dedup_and_create]
+    inputs:
+      event_name: RefactoringAnalysisCompletedEvent
+      payload:
+        event: RefactoringAnalysisCompletedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        items_created: "{{ jobs.dedup_and_create.output.items_created }}"
+        duplicates_skipped: "{{ jobs.dedup_and_create.output.duplicates_skipped }}"

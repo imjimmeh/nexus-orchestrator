@@ -1,0 +1,47 @@
+{
+  "name": "investigation-coordinator",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      {
+        "effect": "deny",
+        "tool": "spawn_subagent_async",
+        "arguments": {
+          "agent_profile": "ceo-agent"
+        }
+      },
+      {
+        "effect": "allow",
+        "tool": "spawn_subagent_async",
+        "arguments": {
+          "agent_profile": "investigation-subagent"
+        }
+      },
+      "allow read *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow bash *",
+      "allow write *",
+      "allow edit *",
+      "allow spawn_subagent_async *",
+      "allow wait_for_subagents *",
+      "allow check_subagent_status *",
+      "allow set_job_output *",
+      "allow step_complete *",
+      "allow ask_user_questions *",
+      "allow kanban.get_charter *",
+      "allow kanban.project_state *",
+      "allow kanban.write_probe_result *",
+      "allow kanban.record_discovery_completed *",
+      "allow kanban.orchestration_timeline *",
+      "allow kanban.orchestration_activity *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *"
+    ]
+  },
+  "assigned_skills": [],
+  "is_active": true
+}

@@ -1,0 +1,168 @@
+workflow_id: project_orchestration_advisor
+name: Project Orchestration Advisor
+description: |
+  Read-only advisor workflow that gathers project evidence and returns a Markdown recommendation memo for an orchestrator or human caller.
+trigger:
+  type: manual
+  launch:
+    context: scope
+    allow_raw_json: false
+    inputs:
+      - key: projectId
+        label: Project ID
+        type: string
+        required: true
+      - key: orchestrationId
+        label: Orchestration ID
+        type: string
+        required: false
+      - key: workItemId
+        label: Work Item ID
+        type: string
+        required: false
+      - key: question
+        label: Question
+        type: string
+        required: false
+      - key: callerContext
+        label: Caller Context
+        type: json
+        required: false
+concurrency:
+  max_runs: 3
+  scope: "{{or trigger.projectId trigger.scopeId trigger.scope_id trigger.context.project_id}}"
+  on_conflict: queue
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.work_item
+      - effect: allow
+        tool: kanban.orchestration_timeline
+      - effect: allow
+        tool: kanban.orchestration_activity
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: search_workflows
+      - effect: allow
+        tool: read_workflow_summary
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: search_playbooks
+      - effect: allow
+        tool: read_playbook
+      - effect: allow
+        tool: set_job_output
+      - effect: deny
+        tool: launch_workflow
+      - effect: deny
+        tool: invoke_agent_workflow
+      - effect: deny
+        tool: record_advice
+      - effect: deny
+        tool: create_memory
+      - effect: deny
+        tool: update_memory
+      - effect: deny
+        tool: delete_memory
+      - effect: deny
+        tool: kanban.orchestration_complete
+jobs:
+  - id: advise
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - adviceMarkdown
+    inputs:
+      agent_profile: ceo-agent
+      projectId: "{{or trigger.projectId trigger.scopeId trigger.scope_id trigger.context.project_id}}"
+      orchestrationId: "{{or trigger.orchestrationId trigger.context.workflow_run_id}}"
+      workItemId: "{{ trigger.workItemId }}"
+      question: "{{or trigger.question trigger.objective trigger.task_prompt trigger.reason}}"
+      callerContext: "{{json (or trigger.callerContext trigger.context)}}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.work_item
+          - effect: allow
+            tool: kanban.orchestration_timeline
+          - effect: allow
+            tool: kanban.orchestration_activity
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: search_workflows
+          - effect: allow
+            tool: read_workflow_summary
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: search_playbooks
+          - effect: allow
+            tool: read_playbook
+          - effect: allow
+            tool: set_job_output
+          - effect: deny
+            tool: launch_workflow
+          - effect: deny
+            tool: invoke_agent_workflow
+          - effect: deny
+            tool: record_advice
+          - effect: deny
+            tool: create_memory
+          - effect: deny
+            tool: update_memory
+          - effect: deny
+            tool: delete_memory
+          - effect: deny
+            tool: kanban.orchestration_complete
+    steps:
+      - id: write_advice
+        type: agent
+        prompt: |
+          You are the Project Orchestration Advisor.
+
+          You are read-only and consultative. Gather evidence and return advice.
+          Do not launch workflows, dispatch work, transition statuses, complete
+          orchestration cycles, write memory, or persist your advice.
+
+          Inputs:
+          - projectId: {{or trigger.projectId trigger.scopeId trigger.scope_id trigger.context.project_id}}
+          - orchestrationId: {{or trigger.orchestrationId trigger.context.workflow_run_id}}
+          - workItemId: {{ trigger.workItemId }}
+          - question: {{or trigger.question trigger.objective trigger.task_prompt trigger.reason}}
+          - callerContext: {{json (or trigger.callerContext trigger.context)}}
+
+          Required evidence process:
+          1. Call kanban.project_state for the project.
+          2. If `workItemId` is present, call `kanban.work_item` for that item and inspect focused metadata, including `feedbackNeeded`, `decisionPrompt`, `humanDecisionResponse`, `humanDecisionResolvedBy`, and `humanDecisionResolvedAt`, before recommending action.
+          3. Call kanban.orchestration_timeline when recent sequence matters.
+          4. Call query_memory when memorySummary indicates useful history,
+             facts, or preferences may exist.
+          5. Inspect available skills in the `<available_skills>` system prompt section. Use the `read` tool to load their content when relevant.
+          6. When a candidate playbook looks relevant, call `read_playbook` with the returned `id` as `playbook_id`, before citing it in the memo.
+          7. Search/read workflows using `search_workflows` and `read_workflow_summary` as needed.
+          8. Do not call raw filesystem tools except calling `read` specifically for skills/playbooks.
+          9. Return a Markdown memo with these exact section headings:
+             ## Snapshot Summary
+             ## Recent Activity
+             ## Recommended Next Step
+             ## Candidate Workflows
+             ## Candidate Skills
+             ## Candidate Playbooks
+             ## Risks And Unknowns
+             ## Evidence Used
+           10. Call set_job_output with adviceMarkdown containing the full memo.
+
+          Your recommendation is not authoritative. The caller decides whether
+          to record it or execute any follow-up action.

@@ -1,0 +1,47 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    // Test files under apps/api/test may import from sibling workspaces
+    // (e.g. apps/kanban/src/...) to exercise end-to-end behaviour without
+    // spinning up docker. The production build config (tsconfig.build.json)
+    // pins rootDir to "src" so this permissive value only affects the
+    // typecheck used by `npx tsc --noEmit` for `test/**/*.ts` files.
+    "rootDir": "../..",
+    "ignoreDeprecations": "6.0",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "strictPropertyInitialization": false,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitAny": true,
+    "strictBindCallApply": true,
+    "noFallthroughCasesInSwitch": true,
+    "types": ["vitest/globals"],
+    "paths": {
+      // The CI merge gate's `node_modules/openai` install is missing the
+      // package's bundled `index.d.ts`, which makes the bare `openai`
+      // specifier resolve to an untyped module and prevents the usual
+      // `declare module "openai" { ... }` shim from working (TS2665
+      // because the `exports` field in the package's `package.json` is
+      // authoritative). Mapping the bare specifier to a local shim file
+      // bypasses the broken package entry point entirely. The local shim
+      // is a no-op when the upstream `index.d.ts` is restored.
+      "openai": ["./src/types/openai-shim.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist", "coverage", "storage", "logs"]
+}

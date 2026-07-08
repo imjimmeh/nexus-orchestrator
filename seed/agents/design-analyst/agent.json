@@ -1,0 +1,19 @@
+{
+  "name": "design-analyst",
+  "tier_preference": "heavy",
+  "supports_vision": true,
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow fetch_url *",
+      "allow read_document *",
+      "allow analyze_image *",
+      "allow extract_figma *",
+      "allow create_artifact *",
+      "allow set_job_output *",
+      "allow search_skills *"
+    ]
+  },
+  "assigned_skills": ["visual-analysis", "ux-evaluation"],
+  "is_active": true
+}

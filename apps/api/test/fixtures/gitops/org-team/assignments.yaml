@@ -1,0 +1,6 @@
+apiVersion: nexus.gitops/v1
+kind: AssignmentList
+assignments:
+  - user: u1
+    role: viewer
+    scope: /acme

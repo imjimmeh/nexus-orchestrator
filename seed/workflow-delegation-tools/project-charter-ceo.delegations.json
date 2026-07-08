@@ -1,0 +1,31 @@
+{
+  "tools": [
+    {
+      "id": "ceo.design_ingestion",
+      "enabled": true,
+      "feature_flag": "DESIGN_INGESTION_WORKFLOWS_ENABLED",
+      "tool_name": "delegate_design_ingestion",
+      "description": "Delegate design artifact ingestion to the design ingestion pipeline. Use when the user provides Figma links, design files, or other design artifacts that should be analyzed into PRD/SDD/work items. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "design_ingestion_new_project",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why ingestion is needed"
+          },
+          "artifact_hints": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Paths or URLs to design artifacts"
+          },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": ["artifact_hints"]
+    }
+  ]
+}

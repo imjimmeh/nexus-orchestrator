@@ -1,0 +1,130 @@
+workflow_id: project_idea_intake
+name: Project Idea Intake
+description: |
+  Conversational session where a user explores an idea with an agent, refines it into
+  a kanban initiative, and creates lightweight backlog work items linked to that initiative.
+  Run this from any project page when you have a rough idea you want to capture on the board.
+
+trigger:
+  type: manual
+  launch:
+    context: scope
+    allow_raw_json: false
+    inputs:
+      - key: scopeId
+        label: Project ID
+        type: string
+        required: true
+        description: Kanban project/scope id.
+      - key: ideaSeed
+        label: Starting Idea
+        type: string
+        required: false
+        description: Optional — a rough description of the idea you want to explore.
+
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: queue
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: ask_user_questions
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.get_charter
+      - effect: allow
+        tool: kanban.initiative_create
+      - effect: allow
+        tool: kanban.initiative_link_work_item
+      - effect: allow
+        tool: kanban.work_item_create
+      - effect: allow
+        tool: kanban.work_items
+      - effect: allow
+        tool: create_artifact
+      - effect: allow
+        tool: upsert_artifact_file
+      - effect: allow
+        tool: list_artifacts
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+
+jobs:
+  - id: ideate_and_capture
+    type: execution
+    tier: heavy
+    inputs:
+      agent_profile: idea-partner
+      scope_id: "{{ trigger.scopeId }}"
+      idea_seed: "{{ trigger.ideaSeed }}"
+    output_contract:
+      required:
+        - initiative_id
+        - created_work_item_ids
+        - session_summary
+        - feature_brief_artifact_id
+      types:
+        initiative_id: string
+        created_work_item_ids:
+          type: array
+          items: string
+        session_summary: string
+        feature_brief_artifact_id: string
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: ask_user_questions
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.get_charter
+          - effect: allow
+            tool: kanban.initiative_create
+          - effect: allow
+            tool: kanban.initiative_link_work_item
+          - effect: allow
+            tool: kanban.work_item_create
+          - effect: allow
+            tool: kanban.work_items
+          - effect: allow
+            tool: create_artifact
+          - effect: allow
+            tool: upsert_artifact_file
+          - effect: allow
+            tool: list_artifacts
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+    steps:
+      - id: ideate
+        prompt_file: prompts/project-idea-intake/ideate.md

@@ -1,0 +1,213 @@
+workflow_id: project_goal_backlog_planning
+name: Project Goal Backlog Planning
+description: |
+  Researches current project state and persisted goals, ideates missing work, deduplicates against existing evidence, and creates backlog-only work items.
+trigger:
+  type: manual
+  launch:
+    context: scope
+    allow_raw_json: false
+    inputs:
+      - key: scopeId
+        label: Project ID
+        type: string
+        required: true
+        description: Kanban project/scope id.
+      - key: orchestrationId
+        label: Orchestration ID
+        type: string
+        required: false
+        description: Optional orchestration state id.
+      - key: goals
+        label: Goals
+        type: string
+        required: false
+        description: Persisted or trigger-provided project goals.
+      - key: reason
+        label: Reason
+        type: string
+        required: false
+        description: Why backlog planning was requested.
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.orchestration_timeline
+      - effect: allow
+        tool: kanban.orchestration_activity
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: kanban.initiative_link_work_item
+jobs:
+  - id: research_goal_backlog
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - candidate_work_items
+        - planning_summary
+      types:
+        candidate_work_items:
+          type: array
+          items:
+            type: object
+            properties:
+              title: string
+              description: string
+              acceptance_criteria:
+                type: array
+                items: string
+              evidence_refs:
+                type: array
+                items: string
+              estimated_effort: string
+              priority: string
+        planning_summary: string
+    inputs:
+      agent_profile: product-manager
+      goals: "{{ trigger.goals }}"
+      reason: "{{ trigger.reason }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.orchestration_timeline
+          - effect: allow
+            tool: kanban.orchestration_activity
+          - effect: allow
+            tool: delegate_web_research
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: kanban.work_item_create
+          - effect: deny
+            tool: kanban.work_item_transition_status
+    steps:
+      - id: research_and_ideate
+        prompt_file: prompts/project-goal-backlog-planning/research-and-ideate.md
+  - id: create_backlog_items
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - research_goal_backlog
+    for_each: "{{ jobs.research_goal_backlog.output.candidate_work_items }}"
+    continue_on_error: true
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_create
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItem:
+          title: "{{ item.title }}"
+          description: "{{ item.description }}"
+          priority: "{{ item.priority }}"
+          status: backlog
+          metadata:
+            source: project_goal_backlog_planning
+            goalAlignment: "{{ item.goalAlignment }}"
+            evidenceRefs: "{{ item.evidenceRefs }}"
+            planningReason: "{{ trigger.reason }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.work_item_create
+  - id: link_backlog_items_to_initiative
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - create_backlog_items
+    for_each: "{{ jobs.create_backlog_items.output.results }}"
+    continue_on_error: true
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.initiative_link_work_item
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        work_item_id: "{{ item.result.id }}"
+        initiative_id: "{{ jobs.research_goal_backlog.output.active_initiative_id }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.initiative_link_work_item
+  - id: summarize_backlog_generation
+    type: execution
+    tier: light
+    depends_on:
+      - link_backlog_items_to_initiative
+    output_contract:
+      required:
+        - decision
+        - created_count
+        - summary
+    inputs:
+      planning_summary: "{{ jobs.research_goal_backlog.output.planning_summary }}"
+      creation_result: "{{ jobs.create_backlog_items.output }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+    steps:
+      - id: summarize
+        type: agent
+        prompt: |
+          Summarize the project goal backlog planning run.
+
+          Planning summary:
+          {{ inputs.planning_summary }}
+
+          Creation result:
+          {{json inputs.creation_result}}
+
+          You MUST call set_job_output exactly once with a native object payload whose data contains these exact required keys:
+          {
+            "data": {
+              "decision": "backlog_generated",
+              "created_count": 0,
+              "summary": "Concise result summary"
+            }
+          }
+
+          Use decision "blocked" or "noop" when appropriate. Then call step_complete with the same concise summary.

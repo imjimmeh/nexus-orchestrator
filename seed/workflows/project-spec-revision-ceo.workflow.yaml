@@ -1,0 +1,244 @@
+workflow_id: project_spec_revision_ceo
+name: Project Spec Revision (CEO)
+description: |
+  Handles revision requests for project specs and re-emits specs-ready once updates are completed.
+trigger:
+  type: event
+  name: ProjectOrchestrationRevisionRequestedEvent
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: get_agent_profiles
+      - effect: allow
+        tool: invoke_agent_workflow
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: set_job_output
+jobs:
+  - id: revise_specs
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - decision
+    inputs:
+      agent_profile: ceo-agent
+      goals: "{{ trigger.goals }}"
+      revision_feedback: "{{ trigger.feedback }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: get_agent_profiles
+          - effect: allow
+            tool: invoke_agent_workflow
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: invite_war_room_participant
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: set_job_output
+          - effect: deny
+            tool: spawn_subagent_async
+          - effect: deny
+            tool: wait_for_subagents
+          - effect: deny
+            tool: check_subagent_status
+    steps:
+      - id: revision
+        prompt: |
+          # SYSTEM ROLE
+          You are the Revision Orchestration Agent for project {{trigger.scopeId}} (Orchestration ID: {{trigger.orchestrationId}}). Your objective is to analyze user feedback, determine which project documents require updating, and delegate targeted revisions to the appropriate specialist agents.
+
+          # CONTEXT
+          {{#if inputs.goals}}
+          **Original Project Goals:** {{inputs.goals}}
+          {{else}}
+          **Original Project Goals:** Not supplied in the trigger. Retrieve the current goal set from persisted orchestration/project context before assessing scope impact.
+          {{/if}}
+
+          **Revision Feedback:** {{inputs.revision_feedback}}
+
+          # PRE-READ: IMPORTED-REPO RECONCILIATION CONTEXT
+          Before delegating specialist revisions for imported-repo reconciliation, read the following project-context documents when they exist:
+          - docs/project-context/ARCHITECTURE.md
+          - docs/project-context/CAPABILITY_MAP.md
+          - docs/project-context/CODEBASE_HEALTH.md
+          - docs/project-context/probe-results/*.md
+
+          Use these artifacts to ground revision decisions in the actual discovered codebase state rather than assumptions.
+
+          # STRICT OPERATING RULES
+          1. **Delegation Syntax:** Delegate PRD and SDD reconciliation with `invoke_agent_workflow` using only `agent_profile` and `task_prompt`; omit `workflow_id` and `workflow_run_id` entirely so the platform uses `orchestration_invoke_agent_default`. Never send empty strings for either field.
+          2. **No Recursive CEO Cycles:** Do not invoke `project_discovery_ceo` or `project_spec_revision_ceo` from inside this workflow.
+          3. **Concurrency Skip Handling:** If `invoke_agent_workflow` returns `execution_status: skipped_due_concurrency`, this is not an immediate retry signal. Record that an equivalent scoped workflow is already active, then continue with available outputs.
+          4. **Self-Healing:** If an agent invocation returns an `execution_status` of "failed", read the error message, correct your parameters, and retry.
+          5. **Cohesive Instructions:** When writing the `task_prompt` for a specialist, be highly specific. Translate the user's broad feedback into actionable, implementation-ready instructions for that specific agent.
+          6. **Completion Output:** Before calling `step_complete`, call set_job_output with the tool argument `data` set directly to an object containing `decision`. Never nest a data key inside data.
+
+          # EXECUTION WORKFLOW
+          Follow these steps to process the revision:
+
+          **Step 1: Impact Analysis**
+          Analyze the `Revision Feedback` against the original project goals from context or persisted orchestration/project context. Determine which domains are impacted:
+          - Does this impact the product scope, user experience, or business logic? (Requires `product-manager`).
+          - Does this impact the system architecture, database, or technical constraints? (Requires `architect-agent`).
+          - *Note: Some feedback may require updates from only one agent, while systemic changes may require both.*
+
+          **Step 2: Specialist Discovery & Delegation**
+          Run the `get_agent_profiles` tool to confirm available specialists, then invoke the necessary updates:
+          - If the PRD is impacted: call `invoke_agent_workflow` with `agent_profile: "product-manager"` and a clear `task_prompt` explaining exactly what to update; omit `workflow_id` so `orchestration_invoke_agent_default` selects the default invocation workflow.
+          - If the SDD is impacted: call `invoke_agent_workflow` with `agent_profile: "architect-agent"` and a clear `task_prompt` explaining exactly what technical elements to adjust; omit `workflow_id` so `orchestration_invoke_agent_default` selects the default invocation workflow.
+          - *Skip delegation for any agent whose domain is unaffected by the feedback.*
+
+          **Step 3: Record Decision**
+          Once all necessary delegations are successful, call set_job_output before calling `step_complete`.
+          Use the tool argument `data` directly:
+          data = {
+            "decision": "Summary of: interpretation of revision feedback, which agents were delegated to and why, what changed, and any assumptions made."
+          }
+          Do not send {"data": {"decision": "..."}} as the value of the data argument; never nest a data key inside data.
+  - id: war_room_revision_alignment
+    type: execution
+    tier: heavy
+    depends_on:
+      - revise_specs
+    condition: "{{#if trigger.feedback}}true{{else}}false{{/if}}"
+    output_contract:
+      required:
+        - war_room_summary
+        - concerns
+        - signoffs
+        - unresolved_blockers
+      types:
+        war_room_summary: string
+        concerns: array
+        signoffs: array
+        unresolved_blockers: array
+    inputs:
+      agent_profile: ceo-agent
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: update_war_room_blackboard
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: get_war_room_state
+          - effect: allow
+            tool: submit_war_room_signoff
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: spawn_subagent_async
+          - effect: allow
+            tool: wait_for_subagents
+          - effect: allow
+            tool: check_subagent_status
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: bash
+    steps:
+      - id: align_revision_decision
+        type: agent
+        prompt_file: prompts/project-spec-revision-ceo/war-room-revision-align.md
+  - id: record_revision_blocked
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - war_room_revision_alignment
+    condition: "{{#if jobs.war_room_revision_alignment.output.unresolved_blockers}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.orchestration_record_cycle_decision
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        decision: blocked
+        reason: "Spec revision unresolved blockers: {{ jobs.war_room_revision_alignment.output.unresolved_blockers }}"
+        idempotency_key: spec-revision-blocked:{{ trigger.scopeId }}:{{ trigger.orchestrationId }}
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+  - id: emit_specs_ready
+    type: emit_event
+    tier: light
+    depends_on:
+      - revise_specs
+      - war_room_revision_alignment
+    condition: "{{#if trigger.feedback}}{{#if jobs.war_room_revision_alignment.output.unresolved_blockers}}false{{else}}true{{/if}}{{else}}true{{/if}}"
+    inputs:
+      event_name: ProjectOrchestrationSpecsReadyEvent
+      payload:
+        event: ProjectOrchestrationSpecsReadyEvent
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+  - id: emit_cycle_request
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - emit_specs_ready
+    condition: "{{#if trigger.feedback}}{{#if jobs.war_room_revision_alignment.output.unresolved_blockers}}false{{else}}true{{/if}}{{else}}true{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.orchestration_request_wakeup
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        source: revision_complete
+        reason: Spec revision workflow completed
+        dedupe_key: project-orchestration-cycle:{{ trigger.scopeId }}:revision_complete:spec_revision_completed
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*

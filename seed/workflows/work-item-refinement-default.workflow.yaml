@@ -1,0 +1,672 @@
+workflow_id: work_item_refinement_default
+name: Work Item Refinement Default (PM -> Architect)
+description: |
+  Runs a pre-flight refinement pipeline before implementation starts. The PM clarifies business acceptance expectations, then the architect captures technical direction and implementation planning artifacts. The work item is transitioned to todo after readiness metadata is recorded and refinement exit gates pass.
+trigger:
+  type: event
+  event: kanban.work_item.status_changed.v1
+  condition: "{{#if (and (eq trigger.status 'refinement') trigger.resource (or (not (or (eq trigger.resource.storyPoints 13) trigger.resource.metadata.split.ceoFlagged)) trigger.resource.parentWorkItemId) (or (not trigger.resource.metadata.refinement.hasClearedRefinementOnce) trigger.resource.metadata.refinement.retroactiveRefinementRequired (and trigger.resource.metadata.refinement.hasClearedRefinementOnce (not (eq trigger.previousStatus 'todo')))))}}true{{else}}false{{/if}}"
+concurrency:
+  max_runs: 1
+  scope: trigger.contextId
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: kanban.publish_specs
+      - effect: allow
+        tool: kanban.estimate_work_item
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+jobs:
+  - id: triage
+    type: mcp_tool_call
+    tier: light
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_triage
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+      policy:
+        allowed_servers: [kanban-mcp]
+        allowed_tools: [kanban.*]
+  - id: triage_classify
+    type: execution
+    tier: light
+    depends_on:
+      - triage
+    condition: "{{#if jobs.triage.output.result.ambiguous}}true{{else}}false{{/if}}"
+    output_contract:
+      required:
+        - track
+      types:
+        track: string
+    max_retries: 1
+    retry_prompt: |
+      Call set_job_output exactly once with a native object: { "track": "trivial" | "standard" | "complex" } reflecting the true complexity of this work item.
+    inputs:
+      agent_profile: product-manager
+    steps:
+      - id: classify
+        type: agent
+        prompt_file: prompts/work-item-refinement-default/triage-classify.md
+  - id: finalize_triage
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - triage
+      - triage_classify
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_finalize_triage
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        deterministic_track: "{{ jobs.triage.output.result.track }}"
+        ambiguous: "{{ jobs.triage.output.result.ambiguous }}"
+        classified_track: "{{ jobs.triage_classify.output.track }}"
+      policy:
+        allowed_servers: [kanban-mcp]
+        allowed_tools: [kanban.*]
+  - id: load_rejection_hotspots
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - finalize_triage
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.rejection_hotspots
+      params:
+        project_id: "{{ trigger.scopeId }}"
+      policy:
+        allowed_servers: [kanban-mcp]
+        allowed_tools: [kanban.*]
+  - id: codebase_analysis
+    type: execution
+    tier: heavy
+    depends_on:
+      - finalize_triage
+      - load_rejection_hotspots
+    condition: "{{#if (eq jobs.finalize_triage.output.result.track 'trivial')}}false{{else}}true{{/if}}"
+    inputs:
+      agent_profile: architect-agent
+      known_failure_patterns: "{{ jobs.load_rejection_hotspots.output.result.hotspots }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: analyse
+        type: agent
+        prompt_file: prompts/work-item-refinement-default/codebase-analysis.md
+  - id: pm_refinement
+    type: execution
+    tier: heavy
+    depends_on:
+      - finalize_triage
+      - codebase_analysis
+    condition: "{{#if (eq jobs.finalize_triage.output.result.track 'complex')}}true{{else}}false{{/if}}"
+    output_contract:
+      required:
+        - pm_summary
+        - acceptance_clarifications
+      types:
+        pm_summary: string
+        acceptance_clarifications: array
+    max_retries: 2
+    retry_prompt: |
+      You have NOT called set_job_output yet. This step requires pm_summary and acceptance_clarifications in the job output. Call set_job_output exactly once using a native object payload: data: { "pm_summary": "...", "acceptance_clarifications": ["..."] } Do not ask for interactive input; submit your best preflight output now.
+    inputs:
+      agent_profile: product-manager
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: kanban.publish_specs
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: pm_refine
+        type: agent
+        prompt_file: prompts/work-item-refinement-default/pm-refine.md
+  - id: persist_pm_artifacts
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - pm_refinement
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          preflight:
+            stage: pm
+            pmSummary: "{{ jobs.pm_refinement.output.pm_summary }}"
+            acceptanceClarifications: "{{ jobs.pm_refinement.output.acceptance_clarifications }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: war_room_refinement_alignment
+    type: execution
+    tier: heavy
+    depends_on:
+      - persist_pm_artifacts
+    condition: "{{#if (eq jobs.finalize_triage.output.result.track 'complex')}}true{{else}}false{{/if}}"
+    max_step_loops: 4
+    max_retries: 1
+    inputs:
+      agent_profile: ceo-agent
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: open_war_room
+          - effect: allow
+            tool: spawn_subagent_async
+          - effect: allow
+            tool: update_war_room_blackboard
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: write
+          - effect: allow
+            tool: close_war_room
+          - effect: allow
+            tool: post_war_room_message
+          - effect: allow
+            tool: submit_war_room_signoff
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: get_war_room_state
+          - effect: deny
+            tool: bash
+    steps:
+      - id: align_refinement
+        type: agent
+        prompt_file: prompts/work-item-refinement-default/war-room-align.md
+  - id: architect_refinement
+    type: execution
+    tier: heavy
+    depends_on:
+      - persist_pm_artifacts
+      - war_room_refinement_alignment
+    output_contract:
+      required:
+        - architect_summary
+        - sdd_targets
+        - split_recommendation
+        - subtask_blueprint
+        - implementation_plan
+      types:
+        architect_summary: string
+        sdd_targets:
+          type: array
+          items: string
+        split_recommendation: string
+        subtask_blueprint:
+          type: array
+          items:
+            type: object
+            properties:
+              subtask_id: string
+              title: string
+              order_index: integer
+              depends_on_subtask_ids:
+                type: array
+                items: string
+        implementation_plan: string
+      optional:
+        - split_children
+        - omission_reason
+        - risk_level
+    max_retries: 2
+    retry_prompt: |
+      Your previous set_job_output was incomplete or malformed. Review the specific errors below and call set_job_output again with a valid JSON object. Requirements: architect_summary (string), sdd_targets (array of strings), split_recommendation ("none" or "split_required"), implementation_plan (REQUIRED — a single markdown STRING containing the full Milestone/Task plan, exactly as written in Step 3; do not omit it and do not wrap it as a JSON object), subtask_blueprint (JSON ARRAY of objects — each element must have: subtask_id (string), title (string), order_index (integer), depends_on_subtask_ids (array of strings)). Derive one subtask_blueprint entry per task from implementation_plan. Pass subtask_blueprint as a native JSON array — do not stringify it.
+    inputs:
+      agent_profile: architect-agent
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: architect_refine
+        type: agent
+        prompt_file: prompts/work-item-refinement-default/architect-refine.md
+  - id: persist_architect_artifacts
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - architect_refinement
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          preflight:
+            stage: architect
+            architectSummary: "{{ jobs.architect_refinement.output.architect_summary }}"
+            sddTargets: "{{ jobs.architect_refinement.output.sdd_targets }}"
+            splitRecommendation: "{{ jobs.architect_refinement.output.split_recommendation }}"
+            splitChildren: "{{ jobs.architect_refinement.output.split_children }}"
+            subtaskBlueprint: "{{ jobs.architect_refinement.output.subtask_blueprint }}"
+            omissionReason: "{{ jobs.architect_refinement.output.omission_reason }}"
+            riskLevel: "{{ jobs.architect_refinement.output.risk_level }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: estimate_story_points
+    type: execution
+    tier: heavy
+    depends_on:
+      - architect_refinement
+    condition: "{{#if (and (not (eq trigger.resource.type 'epic')) (not (eq jobs.architect_refinement.output.split_recommendation 'split_required')))}}true{{else}}false{{/if}}"
+    output_contract:
+      required:
+        - story_points
+      types:
+        story_points: integer
+    max_retries: 2
+    retry_prompt: |
+      You have NOT called set_job_output yet. Call set_job_output exactly once with a native object: { "story_points": <one of 1, 2, 3, 5, 8, 13> }, your best Fibonacci estimate of this work item's size. Do not return any other value or shape.
+    inputs:
+      agent_profile: architect-agent
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: remember
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: estimate
+        type: agent
+        prompt_file: prompts/work-item-refinement-default/estimate-story-points.md
+  - id: persist_story_points
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - estimate_story_points
+    condition: "{{#if jobs.estimate_story_points.output.story_points}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.estimate_work_item
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        storyPoints: "{{ jobs.estimate_story_points.output.story_points }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+  - id: resolve_split
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - persist_architect_artifacts
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          split:
+            disposition: "{{#if (eq jobs.architect_refinement.output.split_recommendation 'split_required')}}blocked_awaiting_children{{else}}umbrella{{/if}}"
+            proposedChildren: "{{ jobs.architect_refinement.output.split_children }}"
+            updatedAt: "{{ trigger.timestamp }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: materialize_split_children
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - resolve_split
+    condition: "{{#if (eq jobs.architect_refinement.output.split_recommendation 'split_required')}}true{{else}}false{{/if}}"
+    for_each: "{{ jobs.architect_refinement.output.split_children }}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_create
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        parentWorkItemId: "{{ trigger.contextId }}"
+        workItem:
+          title: "{{ item.title }}"
+          description: "{{ item.description }}"
+          priority: "{{ item.priority }}"
+          status: backlog
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: validate_subtask_blueprint
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - persist_architect_artifacts
+    condition: "{{#if (and jobs.architect_refinement.output.subtask_blueprint (not (eq jobs.architect_refinement.output.split_recommendation 'split_required')))}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_subtask_validate_blueprint
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        blueprint: "{{ jobs.architect_refinement.output.subtask_blueprint }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: materialize_refinement_subtasks
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - validate_subtask_blueprint
+      - materialize_split_children
+    condition: "{{#if (eq jobs.architect_refinement.output.split_recommendation 'split_required')}}{{#if jobs.materialize_split_children.output.iterations}}true{{else}}false{{/if}}{{else}}true{{/if}}"
+    continue_on_error: true
+    for_each: "{{ jobs.architect_refinement.output.subtask_blueprint }}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_subtask_upsert
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        subtask:
+          subtask_id: "{{or item.subtask_id item.id item.title }}"
+          title: "{{ item.title }}"
+          order_index: "{{ item.order_index }}"
+          depends_on_subtask_ids: "{{ item.depends_on_subtask_ids }}"
+          is_archived: false
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: persist_subtask_materialization_errors
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - materialize_refinement_subtasks
+    condition: "{{#if (eq jobs.materialize_refinement_subtasks.output.ok false)}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          subtask_materialization:
+            ok: false
+            error_count: "{{ length jobs.materialize_refinement_subtasks.output.errors }}"
+            errors: "{{ jobs.materialize_refinement_subtasks.output.errors }}"
+            recorded_at: "{{ trigger.timestamp }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: persist_implementation_plan
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - architect_refinement
+    condition: "{{#if jobs.architect_refinement.output.implementation_plan}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_execution_config
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        executionConfigPatch:
+          implementationPlan: "{{ jobs.architect_refinement.output.implementation_plan }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: plan_validation
+    type: execution
+    tier: heavy
+    depends_on:
+      - persist_implementation_plan
+    condition: "{{#if jobs.architect_refinement.output.implementation_plan}}true{{else}}false{{/if}}"
+    output_contract:
+      required:
+        - validation_result
+      types:
+        validation_result: string
+      optional:
+        - violations
+    max_retries: 1
+    inputs:
+      agent_profile: qa_automation
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: remember
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: validate_plan
+        type: agent
+        prompt_file: prompts/work-item-refinement-default/plan-validation.md
+  - id: validate_refinement_exit_readiness
+    type: run_command
+    tier: light
+    depends_on:
+      - persist_pm_artifacts
+      - persist_architect_artifacts
+      - persist_implementation_plan
+      - plan_validation
+      - war_room_refinement_alignment
+      - persist_story_points
+      - resolve_split
+      - materialize_split_children
+      - materialize_refinement_subtasks
+      - persist_subtask_materialization_errors
+    condition: "{{#if (and jobs.architect_refinement.output.implementation_plan jobs.architect_refinement.output.subtask_blueprint (not (eq jobs.architect_refinement.output.split_recommendation 'split_required')) (not (eq jobs.plan_validation.output.validation_result 'failed')) (not (eq jobs.materialize_refinement_subtasks.output.ok false)))}}true{{else}}false{{/if}}"
+    inputs:
+      command: |
+        test -n "{{ jobs.architect_refinement.output.implementation_plan }}" && test -n "{{ jobs.architect_refinement.output.subtask_blueprint }}" && echo "refinement_exit_ready"
+      working_dir: /tmp
+  - id: mark_refinement_completed
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - validate_refinement_exit_readiness
+    condition: "{{#if (and jobs.architect_refinement.output.implementation_plan jobs.architect_refinement.output.subtask_blueprint (not (eq jobs.architect_refinement.output.split_recommendation 'split_required')) (not (eq jobs.plan_validation.output.validation_result 'failed')) (not (eq jobs.materialize_refinement_subtasks.output.ok false)))}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_patch_metadata
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        metadataPatch:
+          refinement:
+            hasClearedOnce: true
+            hasClearedRefinementOnce: true
+            retroactiveRefinementRequired: false
+            lastOutcome: approved
+            lastCompletedAt: "{{ trigger.timestamp }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list
+  - id: transition_to_todo
+    type: mcp_tool_call
+    tier: light
+    depends_on:
+      - mark_refinement_completed
+    condition: "{{#if (and jobs.architect_refinement.output.implementation_plan jobs.architect_refinement.output.subtask_blueprint (not (eq jobs.architect_refinement.output.split_recommendation 'split_required')) (not (eq jobs.plan_validation.output.validation_result 'failed')) (not (eq jobs.materialize_refinement_subtasks.output.ok false)))}}true{{else}}false{{/if}}"
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_gated_transition
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+        target_status: todo
+        risk_level: "{{ jobs.architect_refinement.output.risk_level }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*
+          - get_todo_list
+          - manage_todo_list

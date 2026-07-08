@@ -1,0 +1,121 @@
+workflow_id: project_roadmap_planning
+name: Project Roadmap Planning
+description: |
+  A strategist reads goals, charter, capability map, and existing initiatives,
+  then proposes or updates initiatives with horizons and priorities, links them
+  to goals, and stamps last_reviewed_at. Does NOT create work items (SRP) — that
+  is ideation's responsibility.
+trigger:
+  type: manual
+  launch:
+    context: scope
+    allow_raw_json: false
+    inputs:
+      - key: scopeId
+        label: Project ID
+        type: string
+        required: true
+        description: Kanban project/scope id.
+      - key: goals
+        label: Goals
+        type: string
+        required: false
+        description: Persisted or trigger-provided project goals.
+      - key: reason
+        label: Reason
+        type: string
+        required: false
+        description: Why roadmap planning was requested.
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: kanban.get_charter
+      - effect: allow
+        tool: kanban.project_state
+      - effect: allow
+        tool: kanban.orchestration_timeline
+      - effect: allow
+        tool: kanban.orchestration_activity
+      - effect: allow
+        tool: kanban.initiative_create
+      - effect: allow
+        tool: kanban.initiative_update
+      - effect: allow
+        tool: kanban.initiative_update_status
+      - effect: allow
+        tool: kanban.initiative_set_priority
+      - effect: allow
+        tool: kanban.initiative_link_goal
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+jobs:
+  - id: plan_roadmap
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - decision
+        - roadmap_summary
+    inputs:
+      agent_profile: product-manager
+      goals: "{{ trigger.goals }}"
+      reason: "{{ trigger.reason }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: kanban.get_charter
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.orchestration_timeline
+          - effect: allow
+            tool: kanban.orchestration_activity
+          - effect: allow
+            tool: delegate_web_research
+          - effect: allow
+            tool: kanban.initiative_create
+          - effect: allow
+            tool: kanban.initiative_update
+          - effect: allow
+            tool: kanban.initiative_update_status
+          - effect: allow
+            tool: kanban.initiative_set_priority
+          - effect: allow
+            tool: kanban.initiative_link_goal
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+    steps:
+      - id: plan_roadmap
+        prompt_file: prompts/project-roadmap-planning/plan-roadmap.md

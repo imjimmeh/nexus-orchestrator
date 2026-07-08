@@ -1,0 +1,6 @@
+{
+  "fileExtensions": ["ts"],
+  "tsConfig": "tsconfig.json",
+  "detectiveOptions": { "ts": { "skipTypeImports": true } },
+  "excludeRegExp": ["\\.spec\\.ts$", "\\.e2e-spec\\.ts$", "/node_modules/", "\\.d\\.ts$", "/dist/"]
+}

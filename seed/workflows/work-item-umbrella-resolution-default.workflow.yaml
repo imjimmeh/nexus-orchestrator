@@ -1,0 +1,27 @@
+workflow_id: work_item_umbrella_resolution_default
+name: Work Item Umbrella Resolution (Default)
+version: 1
+description: >-
+  When a split child reaches done, resolve its umbrella parent to done once all
+  sibling children are complete.
+
+trigger:
+  type: event
+  event: kanban.work_item.status_changed.v1
+  condition: "{{#if (and (eq trigger.status 'done') trigger.resource (or trigger.resource.metadata.split.parentId trigger.resource.metadata.parent_context_id))}}true{{else}}false{{/if}}"
+
+jobs:
+  - id: resolve_umbrella_parent
+    type: mcp_tool_call
+    tier: light
+    inputs:
+      server_id: kanban-mcp
+      tool_name: kanban.work_item_resolve_umbrella_parent
+      params:
+        project_id: "{{ trigger.scopeId }}"
+        workItemId: "{{ trigger.contextId }}"
+      policy:
+        allowed_servers:
+          - kanban-mcp
+        allowed_tools:
+          - kanban.*

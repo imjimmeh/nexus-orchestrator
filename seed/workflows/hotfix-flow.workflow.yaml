@@ -1,0 +1,181 @@
+workflow_id: hotfix_flow
+name: Hotfix Flow
+description: >
+  Fast-path blueprint for urgent fixes: implementation, automated QA, and review.
+  Deep discovery/spec generation is skipped by design.   Input contract requires
+  scopeId, objective, and requested_by.
+
+trigger:
+  type: manual
+  name: hotfix_flow
+  launch:
+    context: scope
+    allow_raw_json: true
+    inputs:
+      - key: objective
+        label: Objective
+        description: Urgent fix objective to deliver in this hotfix run.
+        type: string
+        required: true
+      - key: requested_by
+        label: Requested By
+        description: Human or system requesting the hotfix.
+        type: string
+        required: true
+      - key: orchestrationId
+        label: Orchestration ID
+        description: Optional orchestration thread identifier.
+        type: string
+        required: false
+      - key: risk_level
+        label: Risk Level
+        description: Optional risk marker used in review guidance.
+        type: string
+        required: false
+      - key: scope_boundaries
+        label: Scope Boundaries
+        description: Optional scope guardrails for emergency delivery.
+        type: string
+        required: false
+      - key: artifact_paths
+        label: Artifact Paths
+        description: Optional list of files or paths to prioritize.
+        type: string_array
+        required: false
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: invoke_workflow
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: record_hotfix_scope
+    type: execution
+    tier: heavy
+    output_contract:
+      required: [decision]
+    inputs:
+      agent_profile: ceo-agent
+      objective: "{{ trigger.objective }}"
+      requested_by: "{{ trigger.requested_by }}"
+      risk_level: "{{ trigger.risk_level }}"
+      scope_boundaries: "{{ trigger.scope_boundaries }}"
+    steps:
+      - id: capture_scope
+        prompt: |
+          Record the hotfix risk context and scope statement before implementation.
+
+          Context:
+          - scope_id: {{trigger.scopeId}}
+          - orchestration_id: {{trigger.orchestrationId}}
+          - objective: {{inputs.objective}}
+          - requested_by: {{inputs.requested_by}}
+          - risk_level: {{inputs.risk_level}}
+          - scope_boundaries: {{inputs.scope_boundaries}}
+
+          Required behavior:
+          1) Confirm scope is limited to the urgent fix objective.
+          2) Record the risk context and why hotfix path is justified.
+          3) Call set_job_output with a concise scope statement:
+             {"data": {"decision": "Scope and risk context statement."}}
+
+  - id: implement_hotfix
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [record_hotfix_scope]
+    workflow_id: orchestration_invoke_agent_default
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      agent_profile: senior_dev
+      objective: "{{ trigger.objective }}"
+      task_prompt: "HOTFIX objective: {{ trigger.objective }}. Risk level: {{ trigger.risk_level }}. Scope boundary: {{ trigger.scope_boundaries }}."
+
+  - id: run_quality_gate
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [implement_hotfix]
+    workflow_id: automated_quality_check
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      objective: "{{ trigger.objective }}"
+      requested_by: "{{ trigger.requested_by }}"
+      risk_level: "{{ trigger.risk_level }}"
+      scope_boundaries: "{{ trigger.scope_boundaries }}"
+      artifact_paths: "{{ trigger.artifact_paths }}"
+
+  - id: run_review_gate
+    type: invoke_workflow
+    tier: heavy
+    depends_on: [run_quality_gate]
+    condition: "{{#if (eq jobs.run_quality_gate.output.childWorkflowStatus 'COMPLETED')}}true{{else}}false{{/if}}"
+    workflow_id: project_orchestration_refinement_ceo
+    inputs:
+      scopeId: "{{ trigger.scopeId }}"
+      orchestrationId: "{{ trigger.orchestrationId }}"
+      goals: "{{ trigger.objective }}"
+      reason: "hotfix_flow_review_gate"
+      stateSummary: "Hotfix quality gate completed for {{ trigger.objective }}."
+
+  - id: emit_hotfix_completed
+    type: emit_event
+    tier: light
+    depends_on: [run_review_gate]
+    condition: "{{#if (eq jobs.run_review_gate.output.childWorkflowStatus 'COMPLETED')}}true{{else}}false{{/if}}"
+    inputs:
+      event_name: HotfixFlowCompletedEvent
+      payload:
+        event: HotfixFlowCompletedEvent
+        blueprint_type: hotfix_flow
+        terminal_outcome: completed
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        objective: "{{ trigger.objective }}"
+        requested_by: "{{ trigger.requested_by }}"
+
+  - id: emit_hotfix_rollback_after_qa
+    type: emit_event
+    tier: light
+    depends_on: [run_quality_gate]
+    condition: "{{#if (eq jobs.run_quality_gate.output.childWorkflowStatus 'COMPLETED')}}false{{else}}true{{/if}}"
+    inputs:
+      event_name: HotfixFlowRollbackSuggestedEvent
+      payload:
+        event: HotfixFlowRollbackSuggestedEvent
+        blueprint_type: hotfix_flow
+        failing_stage: quality_gate
+        rollback_guidance: "Quality gate failed. Revert hotfix branch changes and re-run with narrower scope."
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        objective: "{{ trigger.objective }}"
+
+  - id: emit_hotfix_rollback_after_review
+    type: emit_event
+    tier: light
+    depends_on: [run_review_gate]
+    condition: "{{#if (eq jobs.run_quality_gate.output.childWorkflowStatus 'COMPLETED')}}{{#if (eq jobs.run_review_gate.output.childWorkflowStatus 'COMPLETED')}}false{{else}}true{{/if}}{{else}}false{{/if}}"
+    inputs:
+      event_name: HotfixFlowRollbackSuggestedEvent
+      payload:
+        event: HotfixFlowRollbackSuggestedEvent
+        blueprint_type: hotfix_flow
+        failing_stage: review_gate
+        rollback_guidance: "Review gate failed. Roll back risky changes and request targeted follow-up remediation."
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        objective: "{{ trigger.objective }}"

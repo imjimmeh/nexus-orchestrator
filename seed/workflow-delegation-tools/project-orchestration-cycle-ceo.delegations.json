@@ -1,0 +1,222 @@
+{
+  "tools": [
+    {
+      "id": "ceo.goal_backlog_planning",
+      "enabled": true,
+      "tool_name": "delegate_goal_backlog_planning",
+      "description": "Launch goal backlog planning for missing work against the current project scope. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "project_goal_backlog_planning",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "goals": { "type": "array", "items": { "type": "string" } },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": ["goals"]
+    },
+    {
+      "id": "ceo.imported_repo_discovery",
+      "enabled": true,
+      "tool_name": "delegate_imported_repo_discovery",
+      "description": "Launch imported-repository discovery with backend-owned route hints for the current project scope. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "project_discovery_ceo",
+      "tier_restriction": 1,
+      "fixed_trigger_data": {
+        "selectedRoute": "imported-repo-bootstrap",
+        "selectedRuleId": "first_run_imported_repo"
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "retry_allowed": { "type": "boolean" },
+          "basePath": { "type": "string" },
+          "repositoryUrl": { "type": "string" },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": ["retry_allowed", "basePath", "repositoryUrl"]
+    },
+    {
+      "id": "ceo.orchestration_refinement",
+      "enabled": true,
+      "tool_name": "delegate_orchestration_refinement",
+      "description": "Launch orchestration refinement for stale specs or mid-flight strategy refresh. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "project_orchestration_refinement_ceo",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "focus": { "type": "string" },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": ["focus"]
+    },
+    {
+      "id": "ceo.orchestration_advisor",
+      "enabled": true,
+      "tool_name": "delegate_orchestration_advisor",
+      "description": "Launch read-only orchestration advisor analysis for ambiguous project state. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "project_orchestration_advisor",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "question": { "type": "string" },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": ["question"]
+    },
+    {
+      "id": "ceo.work_item_generation",
+      "enabled": true,
+      "tool_name": "delegate_work_item_generation",
+      "description": "Launch work-item generation from approved specs. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "project_work_item_generation_ceo",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "spec_paths": { "type": "array", "items": { "type": "string" } },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": ["spec_paths"]
+    },
+    {
+      "id": "ceo.spec_revision",
+      "enabled": true,
+      "tool_name": "delegate_spec_revision",
+      "description": "Launch project spec revision for approved strategy/spec changes. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "project_spec_revision_ceo",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "spec_paths": { "type": "array", "items": { "type": "string" } },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": ["spec_paths"]
+    },
+    {
+      "id": "ceo.rediscovery",
+      "enabled": true,
+      "tool_name": "delegate_rediscovery",
+      "description": "Launch delta-aware re-discovery (refresh mode) for the current project scope when the capability map has drifted since the last discovery. Durably awaits the result.",
+      "workflow_id": "project_codebase_deep_investigation",
+      "tier_restriction": 1,
+      "fixed_trigger_data": {
+        "mode": "refresh"
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": []
+    },
+    {
+      "id": "ceo.roadmap_planning",
+      "enabled": true,
+      "tool_name": "delegate_roadmap_planning",
+      "description": "Launch roadmap planning to propose/update initiatives with horizons and priorities for the current project scope. Use when horizons are stale or goals lack initiatives. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "project_roadmap_planning",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "goals": { "type": "array", "items": { "type": "string" } },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason"]
+      },
+      "trigger_data_fields": ["goals"]
+    },
+    {
+      "id": "ceo.ui_ux_testing",
+      "enabled": true,
+      "tool_name": "delegate_ui_ux_testing",
+      "description": "Launch UI/UX smoke testing for browser-based validation of the current project scope. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "ui_ux_smoke_test",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "objective": { "type": "string" },
+          "scopeId": { "type": "string" },
+          "target_url": { "type": "string" },
+          "app_start_command": { "type": "string" },
+          "flows": { "type": "array", "items": { "type": "object" } },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason", "objective"]
+      },
+      "trigger_data_fields": [
+        "scopeId",
+        "objective",
+        "target_url",
+        "app_start_command",
+        "flows"
+      ]
+    },
+    {
+      "id": "ceo.web_research",
+      "enabled": true,
+      "tool_name": "delegate_web_research",
+      "description": "Launch governed web research for the current project scope. Suspends this orchestration turn until the launched workflow completes (durable await); do not call await_agent_workflow after it.",
+      "workflow_id": "web_research",
+      "tier_restriction": 1,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string" },
+          "objective": { "type": "string" },
+          "scopeId": { "type": "string" },
+          "questions": { "type": "array", "items": { "type": "string" } },
+          "must_include_domains": { "type": "array", "items": { "type": "string" } },
+          "avoid_domains": { "type": "array", "items": { "type": "string" } },
+          "trigger_data": { "type": "object" }
+        },
+        "required": ["reason", "objective"]
+      },
+      "trigger_data_fields": [
+        "scopeId",
+        "objective",
+        "questions",
+        "must_include_domains",
+        "avoid_domains"
+      ]
+    }
+  ]
+}

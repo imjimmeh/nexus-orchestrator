@@ -1,0 +1,157 @@
+workflow_id: design_ingestion_new_project
+name: Design Ingestion — New Project
+description: >
+  Full ingestion pipeline for creating a new project from design files, images,
+  URLs, and Figma links. Produces PRD, SDD, and work items in refinement.
+
+trigger:
+  type: manual
+  inputs:
+    - name: projectName
+      type: string
+      required: true
+    - name: files
+      type: array
+      required: false
+    - name: urls
+      type: array
+      required: false
+    - name: workItemId
+      type: string
+      required: true
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: fetch_url
+      - effect: allow
+        tool: read_document
+      - effect: allow
+        tool: analyze_image
+      - effect: allow
+        tool: extract_figma
+      - effect: allow
+        tool: create_artifact
+      - effect: allow
+        tool: kanban.propose_work_items
+
+jobs:
+  - id: provision_worktree
+    type: git_operation
+    tier: light
+    inputs:
+      action: provision_worktree
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: main
+      target_branch: "ingestion/{{ trigger.workItemId }}"
+
+  - id: place_inputs
+    type: execution
+    tier: light
+    depends_on: [provision_worktree]
+    inputs:
+      agent_profile: ingestion_runner
+    steps:
+      - id: place
+        type: agent
+        prompt: |
+          Copy all uploaded files from the trigger into the worktree.
+          Place image files and documents under design-inputs/{{ trigger.projectName }}/
+          Save URL references as docs/urls/{{ trigger.projectName }}.md with metadata.
+          Commit all files with message: "chore: place ingestion inputs for {{ trigger.projectName }}"
+          Report completion with set_job_output.
+
+  - id: analyze_inputs
+    type: execution
+    tier: heavy
+    depends_on: [place_inputs]
+    inputs:
+      agent_profile: design-analyst
+    steps:
+      - id: analyze
+        type: agent
+        prompt_file: prompts/design-ingestion/analyze.md
+
+  - id: verify_analysis_commits
+    type: execution
+    tier: light
+    depends_on: [analyze_inputs]
+    inputs:
+      agent_profile: git_verifier
+    steps:
+      - id: verify
+        type: agent
+        prompt_file: prompts/design-ingestion/verify-commits.md
+
+  - id: generate_prd
+    type: execution
+    tier: heavy
+    depends_on: [verify_analysis_commits]
+    inputs:
+      agent_profile: product_manager_ingestion
+    steps:
+      - id: generate
+        type: agent
+        prompt_file: prompts/design-ingestion/generate-prd.md
+
+  - id: generate_sdd
+    type: execution
+    tier: heavy
+    depends_on: [generate_prd]
+    inputs:
+      agent_profile: technical_architect_ingestion
+    steps:
+      - id: generate
+        type: agent
+        prompt_file: prompts/design-ingestion/generate-sdd.md
+
+  - id: validate_artifacts
+    type: execution
+    tier: heavy
+    depends_on: [generate_sdd]
+    inputs:
+      agent_profile: technical_architect_ingestion
+    steps:
+      - id: validate
+        type: agent
+        prompt: |
+          Cross-reference docs/PRD.md and docs/SDD.md for consistency.
+          Verify all user stories in the PRD have corresponding components or APIs in the SDD.
+          Flag any gaps or mismatches. Update SDD if needed.
+          Commit all changes with message: "docs: validate and align PRD/SDD artifacts"
+          Use set_job_output to report: { "status": "complete", "issues_found": [], "issues_fixed": [] }
+
+  - id: merge_worktree
+    type: git_operation
+    tier: light
+    depends_on: [validate_artifacts]
+    inputs:
+      action: merge
+      repository_id: "{{ trigger.scopeId }}"
+      worktree_id: "{{ trigger.contextId }}"
+      base_branch: main
+      target_branch: "ingestion/{{ trigger.workItemId }}"
+
+  - id: create_work_items
+    type: execution
+    tier: heavy
+    depends_on: [merge_worktree]
+    inputs:
+      agent_profile: product_manager_ingestion
+    steps:
+      - id: create
+        type: agent
+        prompt: |
+          Read docs/PRD.md and docs/SDD.md.
+          Use kanban.propose_work_items to create draft epics and tasks for all user stories.
+          Set source: design_ingestion metadata on all items.
+          Use set_job_output to report: { "status": "complete", "work_items_created": [] }

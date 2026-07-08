@@ -1,0 +1,20 @@
+{
+  "name": "ingestion_runner",
+  "description": "Handles file placement into worktrees, URL metadata saving, and git commit operations during ingestion.",
+  "tier_preference": "light",
+  "supports_vision": false,
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow bash *",
+      "allow create_artifact *",
+      "allow set_job_output *",
+      "allow search_skills *"
+    ]
+  },
+  "assigned_skills": [
+    "git-commit-enforcement"
+  ],
+  "is_active": true
+}

@@ -1,0 +1,189 @@
+workflow_id: todo_web_app_test_workflow
+name: Todo Web App Delivery Workflow (Test)
+description: |
+  End-to-end test workflow that targets a complete todo web app and includes planning, implementation, review, QA, and manager sign-off.
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+jobs:
+  - id: generate_epics_tasks
+    type: execution
+    tier: light
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: generate
+        prompt: |
+          You are a product manager.
+          Generate epics and implementation tasks for delivering a todo web app.
+          Required MVP: create/edit/delete/complete todo items and list filtering.
+          Output clear acceptance criteria for each epic.
+
+          When finished, call `step_complete`.
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: bash
+  - id: design_solution
+    type: execution
+    tier: light
+    depends_on:
+      - generate_epics_tasks
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: design
+        prompt: |
+          You are a system architect.
+          Produce a concise solution design for the todo web app based on the epics.
+          Include API shape, data model, and implementation sequencing.
+
+          When finished, call `step_complete`.
+  - id: implement_app
+    type: execution
+    tier: heavy
+    depends_on:
+      - design_solution
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: implement
+        prompt: |
+          You are the implementation engineer.
+          Build the todo web app according to plan and design.
+          Ensure the MVP user flows work end-to-end.
+
+          When finished, call `step_complete`.
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+  - id: run_tests
+    type: execution
+    tier: heavy
+    depends_on:
+      - implement_app
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: test
+        prompt: |
+          Run and summarize automated checks for the todo web app.
+          Verify primary create/edit/delete/complete flows.
+
+          When finished, call `step_complete`.
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+  - id: code_review
+    type: execution
+    tier: light
+    depends_on:
+      - run_tests
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: review
+        prompt: |
+          Perform code review for correctness, maintainability, and security.
+          List blocking issues, if any.
+
+          When finished, call `step_complete`.
+  - id: qa_validation
+    type: execution
+    tier: light
+    depends_on:
+      - code_review
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: validate
+        prompt: |
+          Validate QA readiness for release.
+          Confirm MVP acceptance criteria are met.
+
+          When finished, call `step_complete`.
+  - id: manager_decision
+    type: execution
+    tier: light
+    depends_on:
+      - qa_validation
+    transitions:
+      - condition: jobs.manager_decision.output.structured.complete == false
+        next: generate_epics_tasks
+      - condition: jobs.manager_decision.output.structured.complete == true
+        next: publish
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: decide
+        prompt: |
+          You are the delivery manager.
+          Decide if the todo web app is complete.
+          Return structured JSON with key 'complete' as true/false and include rationale.
+
+          When finished, call `step_complete`.
+  - id: publish
+    type: execution
+    tier: light
+    depends_on:
+      - manager_decision
+    inputs:
+      agent_profile: testing-agent
+    steps:
+      - id: summary
+        prompt: |
+          Publish final delivery summary.
+          State that the end result is a completed todo web app.
+
+          When finished, call `step_complete`.

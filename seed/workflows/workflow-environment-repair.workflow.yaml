@@ -1,0 +1,84 @@
+workflow_id: workflow_environment_repair
+name: Workflow Environment Repair
+description: |
+  Performs constrained local dependency or non-secret config repairs after EPIC-144 policy classification allows autonomous repair delegation.
+trigger:
+  type: event
+  name: workflow.repair-delegation.sysadmin.requested
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: deny
+        tool: step_complete
+      - effect: deny
+        tool: spawn_subagent_async
+      - effect: deny
+        tool: submit_qa_decision
+jobs:
+  - id: repair_environment
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - status
+        - summary
+        - changes
+      optional:
+        - verification
+        - evidence
+    max_retries: 0
+    inputs:
+      agent_profile: sysadmin-repair
+      failed_workflow_run_id: "{{ trigger.workflowRunId }}"
+      failed_workflow_id: "{{ trigger.workflowId }}"
+      failed_job_id: "{{ trigger.failedJobId }}"
+      policy_action_id: "{{ trigger.policyActionId }}"
+      repair_attempt: "{{ trigger.attempt }}"
+      classification_reason: "{{ trigger.decision.reason }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: bash
+          - effect: allow
+            tool: write
+          - effect: allow
+            tool: edit
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: step_complete
+          - effect: deny
+            tool: spawn_subagent_async
+          - effect: deny
+            tool: submit_qa_decision
+    steps:
+      - id: repair
+        type: agent
+        prompt_file: prompts/workflow-environment-repair/repair.md

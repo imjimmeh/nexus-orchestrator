@@ -1,0 +1,71 @@
+workflow_id: memory_learning_sweep
+name: Memory Learning Sweep
+description: |
+  Automated workflow to scan all pending memory/learning candidates, promote valid ones to persistent project memory segments, and generate skill proposals.
+trigger:
+  type: event
+  name: MemoryLearningSweepTriggeredEvent
+concurrency:
+  max_runs: 1
+  scope: global
+  on_conflict: skip
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: list_pending_learning_candidates
+      - effect: allow
+        tool: promote_learning_candidate
+      - effect: allow
+        tool: reject_learning_candidate
+      - effect: allow
+        tool: create_skill_proposal
+      - effect: allow
+        tool: suggest_skill_assignment
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+jobs:
+  - id: sweep
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - promotedCandidates
+        - createdSkillProposals
+      optional:
+        - suggestedSkillAssignments
+    inputs:
+      agent_profile: ceo-agent
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: list_pending_learning_candidates
+          - effect: allow
+            tool: promote_learning_candidate
+          - effect: allow
+            tool: reject_learning_candidate
+          - effect: allow
+            tool: create_skill_proposal
+          - effect: allow
+            tool: suggest_skill_assignment
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: step_complete
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+    steps:
+      - id: run_sweep
+        type: agent
+        prompt_file: prompts/memory-learning-sweep/sweep.md

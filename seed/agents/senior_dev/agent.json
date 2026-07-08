@@ -1,0 +1,39 @@
+{
+  "name": "senior_dev",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow write *",
+      "allow edit *",
+      "allow bash *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow query_memory *",
+      "allow remember *",
+      "allow spawn_subagent_async *",
+      "allow check_subagent_status *",
+      "allow step_complete *",
+      "allow kanban.publish_specs *",
+      "allow validate_specs *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow find *",
+      "allow grep *",
+      "allow delegate_ui_ux_testing *",
+      "allow delegate_web_research *"
+    ]
+  },
+  "assigned_skills": [
+    "test-driven-development",
+    "debugging",
+    "code-review",
+    "refactoring",
+    "api-design",
+    "coding-standards",
+    "task-progress-tracking"
+  ],
+  "is_active": true
+}

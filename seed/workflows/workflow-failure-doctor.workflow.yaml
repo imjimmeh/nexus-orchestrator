@@ -1,0 +1,101 @@
+workflow_id: workflow_failure_doctor
+name: Workflow Failure Doctor
+description: |
+  Diagnoses failed workflow runs and classifies whether failure is likely recoverable by rerunning with better instructions or input context.
+trigger:
+  type: manual
+  launch:
+    context: scope
+    allow_raw_json: true
+    inputs:
+      - key: failed_workflow_run_id
+        label: Failed Workflow Run ID
+        type: string
+        required: true
+      - key: failed_workflow_id
+        label: Failed Workflow ID
+        type: string
+        required: false
+      - key: failed_job_id
+        label: Failed Job ID
+        type: string
+        required: false
+      - key: failure_reason
+        label: Failure Reason
+        type: string
+        required: false
+      - key: source_context
+        label: Source Context
+        type: json
+        required: false
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: remember
+      - effect: deny
+        tool: write
+      - effect: deny
+        tool: bash
+      - effect: deny
+        tool: spawn_subagent_async
+jobs:
+  - id: diagnose_failure
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - decision
+        - confidence
+        - rationale
+      optional:
+        - remediation_instructions
+        - suggested_input_patch
+        - classification
+        - evidence
+    max_retries: 1
+    retry_prompt: |
+      You must call set_job_output. Required fields: decision, confidence, rationale. decision must be exactly one of: fixable, not_fixable.
+    inputs:
+      agent_profile: qa_automation
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: query_memory
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: allow
+            tool: remember
+          - effect: deny
+            tool: write
+          - effect: deny
+            tool: bash
+          - effect: deny
+            tool: spawn_subagent_async
+    steps:
+      - id: doctor_diagnosis
+        type: agent
+        prompt_file: prompts/workflow-failure-doctor/diagnose.md

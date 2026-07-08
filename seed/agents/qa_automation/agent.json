@@ -1,0 +1,36 @@
+{
+  "name": "qa_automation",
+  "tier_preference": "heavy",
+  "model_name": null,
+  "provider_name": null,
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow bash *",
+      "allow query_memory *",
+      "allow step_complete *",
+      "allow submit_qa_decision *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *",
+      "allow open_war_room *",
+      "allow invite_war_room_participant *",
+      "allow post_war_room_message *",
+      "allow close_war_room *",
+      "allow remember *",
+      "allow delegate_ui_ux_testing *",
+      "allow delegate_web_research *"
+    ]
+  },
+  "assigned_skills": [
+    "test-driven-development",
+    "code-review",
+    "qa-regression-check"
+  ],
+  "is_active": true
+}

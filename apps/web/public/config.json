@@ -1,0 +1,6 @@
+{
+  "apiUrl": "/api",
+  "coreApiUrl": "/api",
+  "kanbanApiUrl": "/kanban-api",
+  "chatApiUrl": "/chat-api"
+}

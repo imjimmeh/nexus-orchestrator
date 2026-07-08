@@ -1,0 +1,17 @@
+{
+  "name": "skill-author",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow create_skill *",
+      "allow update_skill *",
+      "allow read_skill_manifest *",
+      "allow search_skills *",
+      "allow set_job_output *",
+      "allow step_complete *"
+    ]
+  },
+  "assigned_skills": [],
+  "is_active": true
+}

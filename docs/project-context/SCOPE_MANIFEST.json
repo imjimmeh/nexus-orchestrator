@@ -1,0 +1,104 @@
+[
+  {
+    "scope_id": "memory-decay-bullmq-processor",
+    "label": "Memory Decay BullMQ Processor (R105 followup)",
+    "paths": [
+      "apps/api/src/memory/memory-decay.processor.ts",
+      "apps/api/src/memory/memory-decay.processor.spec.ts",
+      "apps/api/src/memory/memory-decay.processor.integration.spec.ts"
+    ],
+    "probe_type": "feature_scope"
+  },
+  {
+    "scope_id": "oauth-redis-durable-session",
+    "label": "OAuth Redis-Durable Session (53b39246 refactor)",
+    "paths": [
+      "apps/api/src/oauth/oauth-login-session.store.ts",
+      "apps/api/src/oauth/oauth-login-session.store.spec.ts",
+      "apps/api/src/oauth/oauth-login-session.bus.ts",
+      "apps/api/src/oauth/oauth-login-session.bus.spec.ts",
+      "apps/api/src/oauth/oauth-login-session.bus.service.ts",
+      "apps/api/src/oauth/oauth-login.integration.spec.ts",
+      "apps/api/src/oauth/oauth-login.service.ts",
+      "apps/api/src/oauth/oauth.module.ts",
+      "apps/api/src/redis/redis-pubsub.service.ts"
+    ],
+    "probe_type": "feature_scope"
+  },
+  {
+    "scope_id": "kanban-dispatch-orphan-reconciliation",
+    "label": "Kanban Dispatch Orphan-Work-Item Reconciliation",
+    "paths": [
+      "apps/kanban/src/dispatch/orphan-work-item-reconciliation.ts",
+      "apps/kanban/src/dispatch/orphan-work-item-reconciliation.spec.ts",
+      "apps/kanban/src/dispatch/orphan-work-item-reconciliation.types.ts",
+      "apps/kanban/src/dispatch/dispatch-work-items-reconciliation.ts",
+      "apps/kanban/src/dispatch/dispatch-work-items.core.ts",
+      "apps/kanban/src/dispatch/project-dispatch-capacity.ts",
+      "apps/kanban/src/dispatch/target-branch-claims.ts"
+    ],
+    "probe_type": "feature_scope"
+  },
+  {
+    "scope_id": "memory-drift-detection",
+    "label": "Memory Segment Drift Detection (0cead042)",
+    "paths": [
+      "apps/api/src/memory/memory-drift-detection.service.ts",
+      "apps/api/src/memory/memory-drift-detection.service.spec.ts",
+      "apps/api/src/memory/memory-drift-detection.integration.spec.ts",
+      "apps/api/src/memory/memory-drift-checkers.ts",
+      "apps/api/src/memory/memory-drift-indexes.ts",
+      "apps/api/src/memory/memory-drift-persistence.ts",
+      "apps/api/src/memory/memory-drift-reference.parser.ts",
+      "apps/api/src/memory/memory-drift.coercion.ts",
+      "apps/api/src/memory/memory-drift.constants.ts",
+      "apps/api/src/memory/memory-drift.processor.ts",
+      "apps/api/src/memory/memory-drift.types.ts"
+    ],
+    "probe_type": "feature_scope"
+  },
+  {
+    "scope_id": "runtime-feedback",
+    "label": "Runtime Feedback Capability Module (NEW)",
+    "paths": [
+      "apps/api/src/runtime-feedback/runtime-feedback.module.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback.controller.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback.controller.spec.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback-ingestion.service.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback-ingestion.service.spec.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback-policy.service.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback-policy.service.spec.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback-redaction.service.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback-redaction.service.spec.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback-diagnostics.service.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback-diagnostics.service.spec.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback.integration.spec.ts",
+      "apps/api/src/runtime-feedback/runtime-feedback.types.ts"
+    ],
+    "probe_type": "feature_scope"
+  },
+  {
+    "scope_id": "learning-convergence-feedback",
+    "label": "Learning Convergence Feedback (88d7654e promoted-lesson usage telemetry)",
+    "paths": [
+      "apps/api/src/memory/learning/learning-convergence.helper.ts",
+      "apps/api/src/memory/learning-measurement.state.ts",
+      "apps/api/src/memory/memory-decay.classify.ts",
+      "apps/api/src/memory/memory-decay.classify.types.ts",
+      "apps/api/src/memory/memory-decay.value-predicate.ts",
+      "apps/api/src/memory/memory-decay.value-predicate.types.ts"
+    ],
+    "probe_type": "feature_scope"
+  },
+  {
+    "scope_id": "memory-segment-feedback-channel",
+    "label": "Memory Segment Feedback Channel (66ea23d1 agent feedback)",
+    "paths": [
+      "apps/api/src/memory/memory-segment-feedback.service.ts",
+      "apps/api/src/memory/memory-segment-feedback.service.types.ts",
+      "apps/api/src/memory/memory-learning-feedback-loop.integration.spec.ts",
+      "apps/api/src/memory/learning/learning-convergence.helper.ts"
+    ],
+    "probe_type": "feature_scope"
+  }
+]

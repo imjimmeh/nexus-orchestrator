@@ -1,0 +1,7 @@
+apiVersion: nexus.gitops/v1
+kind: Role
+name: viewer
+description: Read-only viewer
+ownerScope: null
+permissions:
+  - resource:read

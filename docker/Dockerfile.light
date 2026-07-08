@@ -1,0 +1,62 @@
+# Stage 1: Build
+FROM node:24-alpine AS builder
+
+WORKDIR /build
+
+# Copy shared packages
+COPY packages/core ./packages/core
+COPY packages/harness-runtime ./packages/harness-runtime
+COPY packages/harness-engine-pi ./packages/harness-engine-pi
+COPY package.json package-lock.json turbo.json ./
+
+# Install and build (--ignore-scripts prevents prepare/husky from running in non-git context)
+RUN npm install --ignore-scripts
+# Build harness-runtime, harness-engine-pi and their workspace dependencies in topological order.
+RUN npx turbo run build --filter=@nexus/harness-engine-pi
+
+# Stage 2: Run
+FROM node:24-alpine
+
+WORKDIR /app
+
+# ripgrep backs the harness's native grep tool.
+RUN apk add --no-cache ripgrep
+
+# Copy root manifest
+COPY package.json package-lock.json ./
+
+# Copy packages manifests
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/harness-runtime/package.json ./packages/harness-runtime/package.json
+COPY packages/harness-engine-pi/package.json ./packages/harness-engine-pi/package.json
+
+# Vendored SDK patches (applied explicitly below — npm postinstall is skipped by --ignore-scripts)
+COPY patches ./patches
+
+# Copy built artifacts from builder
+COPY --from=builder /build/packages/core/dist ./packages/core/dist
+COPY --from=builder /build/packages/harness-runtime/dist ./packages/harness-runtime/dist
+COPY --from=builder /build/packages/harness-engine-pi/dist ./packages/harness-engine-pi/dist
+
+# Install production dependencies for the workspace
+RUN npm install --omit=dev --no-audit --no-fund --ignore-scripts
+
+# Apply vendored pi SDK patches (earendil-works/pi#5463, #5445). --ignore-scripts
+# above skips the postinstall hook, so run patch-package explicitly. patch-package
+# is a runtime dependency so it is present even with --omit=dev.
+RUN npx patch-package
+
+# Create required directories
+RUN mkdir -p /opt/harness-runtime/agent /app/.pi/agent /app/extensions /workspace
+
+# Set environment defaults
+ENV NODE_ENV=production
+ENV WEBSOCKET_URL=http://host.docker.internal:3001
+ENV WORKSPACE_PATH=/workspace
+ENV HARNESS_ID=pi
+
+EXPOSE 8374
+WORKDIR /workspace
+
+# Run from the root to ensure proper workspace resolution
+ENTRYPOINT ["node", "/app/packages/harness-runtime/dist/main.js"]

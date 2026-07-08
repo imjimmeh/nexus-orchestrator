@@ -1,0 +1,90 @@
+workflow_id: web_research
+name: Web Research
+description: Governed external web research with cited findings.
+trigger:
+  type: manual
+  launch:
+    context: none
+    allow_raw_json: true
+    inputs:
+      - key: scopeId
+        label: Scope ID
+        type: string
+        required: false
+      - key: objective
+        label: Objective
+        type: string
+        required: true
+      - key: questions
+        label: Questions
+        type: string_array
+        required: false
+      - key: must_include_domains
+        label: Must Include Domains
+        type: string_array
+        required: false
+      - key: avoid_domains
+        label: Avoid Domains
+        type: string_array
+        required: false
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: find
+      - effect: allow
+        tool: grep
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: remember
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: web_search
+      - effect: allow
+        tool: web_fetch
+      - effect: allow
+        tool: browser_open_page
+      - effect: allow
+        tool: browser_navigate
+      - effect: allow
+        tool: browser_wait_for
+      - effect: allow
+        tool: browser_read_page
+      - effect: allow
+        tool: browser_screenshot
+      - effect: allow
+        tool: browser_close_page
+      - effect: allow
+        tool: create_artifact
+      - effect: allow
+        tool: list_artifacts
+      - effect: allow
+        tool: list_artifact_files
+      - effect: allow
+        tool: upsert_artifact_file
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: step_complete
+jobs:
+  - id: research
+    type: execution
+    tier: heavy
+    max_step_loops: 3
+    inputs:
+      agent_profile: web-researcher
+    output_contract:
+      required: [summary, findings, sources, open_questions]
+    steps:
+      - id: gather_and_summarize
+        type: agent
+        prompt_file: prompts/web-research/research.md

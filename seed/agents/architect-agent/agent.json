@@ -1,0 +1,52 @@
+{
+  "name": "architect-agent",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow write *",
+      "allow edit *",
+      "allow bash *",
+      "allow query_memory *",
+      "allow remember *",
+      "allow spawn_subagent_async *",
+      "allow wait_for_subagents *",
+      "allow step_complete *",
+      "allow submit_implementation_plan *",
+      "allow submit_qa_decision *",
+      "allow submit_merge_result *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *",
+      "allow fetch_url *",
+      "allow read_document *",
+      "allow create_artifact *",
+      "allow kanban.list_work_items *",
+      "allow kanban.work_item_create *",
+      "allow kanban.publish_specs *",
+      "allow kanban.work_item *",
+      "allow kanban.work_item_validate_split_coverage *",
+      "allow kanban.project_state *",
+      "allow delegate_ui_ux_testing *",
+      "allow delegate_web_research *",
+      "allow open_war_room *",
+      "allow invite_war_room_participant *",
+      "allow post_war_room_message *",
+      "allow update_war_room_blackboard *",
+      "allow submit_war_room_signoff *",
+      "allow get_war_room_state *",
+      "allow close_war_room *"
+    ]
+  },
+  "assigned_skills": [
+    "architecture-review",
+    "implementation-planning",
+    "software-architect"
+  ],
+  "is_active": true
+}

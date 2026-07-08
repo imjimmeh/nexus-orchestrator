@@ -1,0 +1,34 @@
+{
+  "name": "orchestrator",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow write *",
+      "allow edit *",
+      "allow bash *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow spawn_subagent_async *",
+      "allow wait_for_subagents *",
+      "allow step_complete *",
+      "allow submit_implementation_plan *",
+      "allow kanban.publish_specs *",
+      "allow validate_specs *",
+      "allow set_job_output *",
+      "allow delegate_ui_ux_testing *",
+      "allow delegate_web_research *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow find *",
+      "allow grep *",
+      "allow open_war_room *",
+      "allow invite_war_room_participant *",
+      "allow post_war_room_message *",
+      "allow close_war_room *"
+    ]
+  },
+  "assigned_skills": ["dependency-updater", "task-progress-tracking"],
+  "is_active": true
+}

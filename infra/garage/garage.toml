@@ -1,0 +1,24 @@
+# Single-node dev deployment. Garage still requires rpc_bind_addr and
+# rpc_secret even with one node; the secret below is a dev-only value.
+# Rotate (and inject via env) for any shared/multi-node deployment.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+replication_factor = 1
+
+rpc_bind_addr = "0.0.0.0:3901"
+rpc_secret = "65b70ded5fdaa619fb73c7d604696f441ee75991496c2bfee60fcc4237b667e5"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "0.0.0.0:3900"
+root_domain = ".s3.garage.localhost"
+
+[s3_web]
+bind_addr = "0.0.0.0:3902"
+root_domain = ".web.garage.localhost"
+index = "index.html"
+
+[admin]
+api_bind_addr = "0.0.0.0:3903"

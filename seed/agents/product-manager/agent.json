@@ -1,0 +1,44 @@
+{
+  "name": "product-manager",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow write *",
+      "allow edit *",
+      "allow bash *",
+      "allow query_memory *",
+      "allow kanban.publish_specs *",
+      "allow validate_specs *",
+      "allow step_complete *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *",
+      "allow fetch_url *",
+      "allow read_document *",
+      "allow create_artifact *",
+      "allow kanban.propose_work_items *",
+      "allow kanban.get_charter *",
+      "allow kanban.project_state *",
+      "allow kanban.orchestration_timeline *",
+      "allow kanban.orchestration_activity *",
+      "allow delegate_web_research *",
+      "allow kanban.initiative_create *",
+      "allow kanban.initiative_update *",
+      "allow kanban.initiative_update_status *",
+      "allow kanban.initiative_set_priority *",
+      "allow kanban.initiative_link_goal *"
+    ]
+  },
+  "assigned_skills": [
+    "product-requirements-refinement",
+    "write-a-prd",
+    "prd-to-issues"
+  ],
+  "is_active": true
+}

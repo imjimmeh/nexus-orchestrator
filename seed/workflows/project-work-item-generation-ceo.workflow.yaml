@@ -1,0 +1,237 @@
+workflow_id: project_work_item_generation_ceo
+name: Project Work-Item Generation (CEO)
+description: >
+  Generates initial bootstrap work items after specs are approved, then marks
+  orchestration bootstrap as completed.
+
+trigger:
+  type: event
+  name: ProjectOrchestrationApprovalGrantedEvent
+
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: skip
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: query_memory
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: kanban.publish_specs
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: generate_bootstrap_work_items
+    type: execution
+    tier: heavy
+    output_contract:
+      required: [file_paths, dependency_strategy]
+      types:
+        file_paths: array
+        dependency_strategy: string
+    inputs:
+      agent_profile: spec-generator
+      goals: "{{ trigger.goals }}"
+    steps:
+      - id: bootstrap
+        prompt: |
+          # SYSTEM ROLE
+          You are the Technical Delivery Orchestration Agent for project {{trigger.scopeId}} (Orchestration ID: {{trigger.orchestrationId}}). Your objective is to translate approved project specifications into sequenced, implementation-ready work items.
+
+          # CONTEXT
+          {{#if inputs.goals}}
+          **Project Goals:** {{inputs.goals}}
+          {{else}}
+          **Project Goals:** Not supplied in the trigger. Ground backlog generation in the approved PRD, SDD, and any persisted orchestration goals visible in project state.
+          {{/if}}
+
+          # STRICT OPERATING RULES
+          1. **No Guessing (Grounding):** You must base all work items strictly on the approved PRD and SDD. Do not invent features or technical requirements that are not in the documentation.
+          2. **Implementation-Ready Standard:** Every work item you create must include:
+            - A clear, descriptive title.
+            - Actionable implementation steps.
+            - Explicit acceptance criteria in structured AC-N format (see below).
+            - Stable canonical identity in frontmatter via `item_id`.
+          3. **Dependency Integrity:** Work items must have explicit dependencies. You must only link *direct* dependencies (e.g., Task C depends on Task B; do not redundantly link Task C to Task A).
+          4. **Markdown-First Contract:** Author canonical markdown specs under `docs/work-items/` (one file per work item) with YAML frontmatter fields: `item_id`, `title`, `priority`, `scope`, and `depends_on_item_ids` (optional array or CSV).
+          5. **Output Signaling:** Do not call any legacy direct work-item creation tool from this workflow. The system will automatically reconcile your markdown files to the database AFTER you signal completion. Simply write all files, then call `set_job_output` with exact required keys under `data`, including generated `file_paths` and `dependency_strategy`. The next workflow step will handle the database hydration.
+
+          Correct completion shape:
+          ```json
+          {
+            "data": {
+              "file_paths": ["docs/work-items/example.md"],
+              "dependency_strategy": "direct_dependencies_only"
+            }
+          }
+          ```
+
+          # ACCEPTANCE CRITERIA FORMAT
+
+          Every work item's markdown file must include an `## Acceptance Criteria` section with numbered IDs:
+
+          ```markdown
+          ## Acceptance Criteria
+          - AC-1: [concrete, independently testable criterion - what must be true for this to be accepted]
+          - AC-2: [concrete, independently testable criterion]
+          - AC-3: [concrete, independently testable criterion]
+          ```
+
+          Rules for acceptance criteria:
+          - Each criterion must be independently verifiable without manual inspection.
+          - Prefer observable outcomes: "endpoint returns 201 with body X" not "endpoint works".
+          - AC IDs are stable - do not renumber them if the list is amended later.
+          - Minimum 2 criteria per work item. Complex items should have one criterion per major deliverable.
+
+          # EXECUTION WORKFLOW
+          Follow these steps sequentially to generate the project backlog:
+
+          **Step 0: Ground Backlog in Discovered State**
+
+          Read docs/project-context/CAPABILITY_MAP.md and docs/project-context/probe-results/*.md before generating work items. Completed existing-work items must include evidence refs and source probe artifact paths.
+
+          Imported repository hard stop:
+          If the project is an imported repository or the trigger/source context identifies imported-repo bootstrap, `docs/project-context/CAPABILITY_MAP.md` and at least one `docs/project-context/probe-results/*.md` artifact are required before generating backlog work items.
+
+          If these artifacts are missing, do not treat the project as greenfield. Do not create bootstrap work for existing functionality. Record the blocker in generated output and call `set_job_output` with `data.file_paths: []` and `data.dependency_strategy: "blocked_missing_imported_repo_investigation"`.
+
+          This must block instead of treating the project as greenfield when imported-repo investigation artifacts are absent.
+
+          Before reading the PRD/SDD, check whether `docs/project-context/CAPABILITY_MAP.md`
+          exists in the workspace.
+
+          If it does:
+          - Read it in full.
+          - Implemented capabilities are evidence records, not dispatchable backlog.
+            If you create markdown for implemented capabilities, set `status: done`, include evidence refs,
+            and do not create duplicate `todo` or `backlog` items for the same capability.
+          - Partial capabilities become `status: in-review` only when the remaining validation work is concrete and testable.
+          - Missing capabilities and uncovered approved goals become actionable work with `status: backlog` or `todo` according to readiness.
+          - Do not dispatch work from unpublished specs.
+
+          If CAPABILITY_MAP.md does not exist (greenfield project), skip this step entirely
+          and proceed to Step 1.
+
+          **Step 1: Context Discovery (Crucial)**
+          Before creating any items, you must locate and read the source of truth. 
+          - Execute a workspace search to find the finalized PRD (Product Requirements Document) and SDD (System Design Document). 
+          - Read these documents to fully understand the MVP scope and technical architecture.
+
+          **Step 2: Infrastructure & Bootstrap Slicing**
+          Based on the SDD, define the foundational work items required before any feature code can be written. This includes:
+          - Project initialization and repository setup.
+          - Environment configuration.
+          - CI/CD pipelines, linting, and testing baselines.
+          *Note: These items will serve as the root dependencies for the rest of the project.*
+
+          **Step 3: Feature Slicing & Dependency Mapping**
+          Break down the features from the PRD into discrete engineering tasks. 
+          - Map each feature to the architecture defined in the SDD.
+          - Assign dependencies, ensuring all feature tasks depend on the relevant bootstrap tasks from Step 2 being completed first.
+
+          **Step 4: Submission**
+          Write all canonical markdown files to `docs/work-items/` and finalize by calling `set_job_output` with `data.file_paths` and `data.dependency_strategy` populated exactly.
+
+  - id: publish_generated_work_items
+    type: execution
+    tier: heavy
+    depends_on: [generate_bootstrap_work_items]
+    output_contract:
+      required: [publish_result, published, summary]
+      types:
+        publish_result: object
+        published: boolean
+        summary: string
+    inputs:
+      agent_profile: ceo-agent
+    steps:
+      - id: publish_specs
+        type: agent
+        prompt: |
+          The previous job generated canonical work-item specs:
+          {{json jobs.generate_bootstrap_work_items.output.file_paths}}
+
+          If `jobs.generate_bootstrap_work_items.output.dependency_strategy` is `blocked_missing_imported_repo_investigation`, or `file_paths` is empty because imported-repo investigation artifacts were missing, Do not call `kanban.publish_specs`.
+
+          Instead, record and report the blocker by calling `set_job_output` with:
+          - publish_result: a blocked result that names `blocked_missing_imported_repo_investigation`
+          - published: false
+          - summary: explain that imported-repo work-item generation was blocked before publishing because required investigation artifacts were missing
+
+          Then call `step_complete` with a blocked summary and stop; do not continue to the publish branch. Do not publish stale files from `docs/work-items` for this blocker.
+
+          Otherwise, when the generation job is not blocked and `file_paths` is non-empty, call `kanban.publish_specs` with:
+
+          ```json
+          {
+            "project_id": "{{ trigger.scopeId }}",
+            "workspace_root": "{{ trigger.basePath }}",
+            "spec_directory": "docs/work-items",
+            "allow_missing_specs": false
+          }
+          ```
+
+          For imported projects, `workspace_root` must be the host-visible `{{ trigger.basePath }}`.
+          Never use `/workspace` for `kanban.publish_specs`; it is runner-local and not visible to Kanban.
+          If `{{ trigger.basePath }}` is blank for an imported project, set job output as blocked instead of guessing `/workspace`.
+
+          If `trigger.basePath` is absent for a non-imported project, omit `workspace_root` only after confirming the runner-local tool is executing inside `/workspace`.
+
+          Then call `set_job_output` with:
+          - publish_result: the exact `kanban.publish_specs` result
+          - published: true only when `publish_result.ok` is true
+          - summary: concise summary of created, updated, and errored counts
+
+          If publication fails, call `step_complete` as failed. Do not dispatch work from unpublished specs.
+
+          After recording the result, call `step_complete` with a concise summary.
+
+  - id: emit_bootstrap_completed
+    type: emit_event
+    tier: light
+    depends_on: [publish_generated_work_items]
+    condition: "{{#if (eq jobs.publish_generated_work_items.output.published true)}}true{{else}}false{{/if}}"
+    inputs:
+      event_name: ProjectOrchestrationBootstrapCompletedEvent
+      payload:
+        event: ProjectOrchestrationBootstrapCompletedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+
+  - id: emit_cycle_request
+    type: emit_event
+    tier: light
+    depends_on: [emit_bootstrap_completed]
+    condition: "{{#if (eq jobs.publish_generated_work_items.output.published true)}}true{{else}}false{{/if}}"
+    inputs:
+      event_name: ProjectOrchestrationCycleRequestedEvent
+      payload:
+        event: ProjectOrchestrationCycleRequestedEvent
+        scopeId: "{{ trigger.scopeId }}"
+        orchestrationId: "{{ trigger.orchestrationId }}"
+        goals: "{{ trigger.goals }}"
+        contextId: "__orchestration_lifecycle__"
+        source: "bootstrap_complete"
+        reason: "Work item generation, publication, and bootstrap completed"
+        isRestart: "{{ trigger.isRestart }}"
+        stateSummary: "{{ trigger.stateSummary }}"
+        basePath: "{{ trigger.basePath }}"
+        repositoryUrl: "{{ trigger.repositoryUrl }}"

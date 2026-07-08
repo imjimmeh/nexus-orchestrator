@@ -1,0 +1,130 @@
+workflow_id: conversational_artifact_steering
+name: Conversational Artifact Steering
+description: >
+  Apply artifact changes via worktree provision, agent-driven editing,
+  and canonical spec publishing. Triggered when a user approves a
+  "modify artifact" steering plan.
+
+trigger:
+  type: manual
+  launch:
+    context: scope
+    inputs:
+      - key: changeInstructions
+        label: Change Instructions
+        type: string
+        required: true
+        description: Approved artifact steering instructions to apply.
+
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: queue
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: bash
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: write
+      - effect: allow
+        tool: edit
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: set_job_output
+      - effect: allow
+        tool: kanban.publish_specs
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+      - effect: allow
+        tool: remember
+
+jobs:
+  - id: provision_worktree
+    type: execution
+    tier: light
+    output_contract:
+      required: [worktree_path]
+      types:
+        worktree_path: string
+    inputs:
+      agent_profile: ceo-agent
+      scope_id: "{{ trigger.scopeId }}"
+      change_instructions: "{{ trigger.changeInstructions }}"
+    steps:
+      - id: create_worktree
+        prompt: |
+          # SYSTEM ROLE
+          You are the Worktree Provisioning Agent for project {{inputs.scope_id}}.
+          Your task is to create a git worktree for applying artifact steering changes.
+
+          # EXECUTION STEPS
+
+          **Step 1: Create Worktree**
+          Use `bash` to create a new worktree branch:
+          ```bash
+          git worktree add /workspace/steering-{{inputs.scope_id}} -b steering/artifact-update-{{trigger.scopeId}}
+          ```
+
+          **Step 2: Record Worktree Path**
+          Call set_job_output with:
+          {
+            "data": {
+              "worktree_path": "/workspace/steering-{{inputs.scope_id}}",
+              "branch_name": "steering/artifact-update-{{trigger.scopeId}}"
+            }
+          }
+
+  - id: apply_changes
+    type: execution
+    tier: heavy
+    depends_on: [provision_worktree]
+    inputs:
+      agent_profile: software-engineer-assistant
+      worktree_path: "{{ jobs.provision_worktree.output.worktree_path }}"
+      change_instructions: "{{ trigger.changeInstructions }}"
+      scope_id: "{{ trigger.scopeId }}"
+    output_contract:
+      required: [decision]
+    steps:
+      - id: edits
+        prompt_file: prompts/artifact-steering/apply-changes.md
+
+  - id: publish
+    type: execution
+    tier: light
+    depends_on: [apply_changes]
+    inputs:
+      scope_id: "{{ trigger.scopeId }}"
+      spec_directory: "{{ jobs.provision_worktree.output.worktree_path }}/docs/work-items"
+    steps:
+      - id: publish_specs
+        prompt: |
+          # SYSTEM ROLE
+          You are the Spec Publishing Agent for project {{inputs.scope_id}}.
+
+          # EXECUTION STEPS
+
+          **Step 1: Publish Specs**
+           Call `kanban.publish_specs` with:
+           - project_id: "{{inputs.scope_id}}"
+           - spec_directory: "{{inputs.spec_directory}}"
+           - allow_missing_specs: false
+
+           Treat `ok: false` as completed with errors or blocked. Do not convert failed publication into success.
+
+           **Step 2: Record Outcome**
+           Call set_job_output with:
+           {
+             "data": {
+               "decision": "Artifact changes published successfully",
+               "publish_result": "<direct kanban.publish_specs output>"
+             }
+           }

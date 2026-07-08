@@ -1,0 +1,91 @@
+workflow_id: work_item_todo_dispatch_default
+name: Work Item Todo Auto-Dispatch
+description: >
+  Event-driven dispatcher workflow that starts an agent session to choose
+  which todo work item(s) to start. Triggered by coordinator events after
+  capacity and dependency-ready scheduling checks.
+
+trigger:
+  type: event
+  name: WorkItemDispatchSelectEvent
+
+concurrency:
+  max_runs: 1
+  scope: "trigger.scopeId"
+  on_conflict: skip
+
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: kanban.dispatch_selected_work_items
+      - effect: allow
+        tool: step_complete
+      - effect: allow
+        tool: yield_session
+      - effect: allow
+        tool: open_war_room
+      - effect: allow
+        tool: invite_war_room_participant
+      - effect: allow
+        tool: post_war_room_message
+      - effect: allow
+        tool: close_war_room
+      - effect: allow
+        tool: read
+      - effect: allow
+        tool: ls
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+
+jobs:
+  - id: select_and_start
+    type: execution
+    tier: light
+    steps:
+      - id: select
+        type: agent
+        prompt: |
+          You are the dispatch selector agent.
+
+          Scope ID: {{ trigger.scopeId }}
+          Reason: {{ trigger.reason }}
+          Available slots from trigger (advisory; Kanban dispatch recomputes the authoritative project WIP cap): {{ trigger.slots }}
+
+          Candidate work items (already dependency-ready):
+          {{#if trigger.candidates}}
+          {{#each trigger.candidates}}
+          - {{this.title}} (priority: {{this.priority}})
+            id: {{this.id}}
+            {{#if this.dependsOn}}dependsOn: {{json this.dependsOn}}{{/if}}
+            criticalPathLength: {{this.criticalPathLength}}
+            topologicalLevel: {{this.topologicalLevel}}
+            isOnCurrentCriticalPath: {{this.isOnCurrentCriticalPath}}
+          {{/each}}
+          {{else}}
+          - none
+          {{/if}}
+
+          Selection policy:
+          1) Prefer higher criticalPathLength when present.
+          2) Break ties by priority (p0 > p1 > p2 > p3).
+          3) Then prefer lower topologicalLevel and deterministic candidate order.
+          4) Select up to the available slot limit when present. The dispatch service will recompute project WIP capacity from Kanban settings before launching.
+
+          Task:
+          1) Decide which work items should start now (if any), up to the slot limit when present.
+          2) Only choose IDs present in trigger.candidates.
+          3) Do NOT call spawn_subagent_async for this workflow.
+          4) Call `kanban.dispatch_selected_work_items` only when you selected at least one work item ID, with:
+             - project_id: {{ trigger.scopeId }}
+             - context_ids: the selected work item IDs
+             - workflow_id: work_item_in_progress_default
+             - requested_by: dispatch-selector
+             - max_concurrent_per_agent: {{ trigger.maxConcurrentPerAgent }} when provided
+             - slots: {{ trigger.slots }} when provided (batch-local advisory cap; service recomputes authoritative project WIP capacity)
+          5) If you select no work item IDs, do not call `kanban.dispatch_selected_work_items`; call `step_complete` only with the no-selection rationale.
+          6) Inspect the dispatch result before claiming success. For each dispatched item, confirm mutationConfirmed is true and record linkedRunId, currentExecutionId, status, and idempotent.
+          7) Report the dispatch result and rationale with `step_complete`.

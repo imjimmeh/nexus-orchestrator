@@ -1,0 +1,27 @@
+{
+  "name": "investigation-subagent",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow bash *",
+      "allow write *",
+      "allow edit *",
+      "allow submit_resource_artifact *",
+      "allow step_complete *",
+      "allow kanban.get_charter *",
+      "allow kanban.project_state *",
+      "allow kanban.orchestration_timeline *",
+      "allow kanban.orchestration_activity *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *"
+    ]
+  },
+  "assigned_skills": [],
+  "is_active": true
+}

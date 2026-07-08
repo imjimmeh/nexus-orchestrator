@@ -1,0 +1,49 @@
+{
+  "name": "research-and-automation-assistant",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow write *",
+      "allow edit *",
+      "allow bash *",
+      "allow query_memory *",
+      "allow remember *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow get_capabilities *",
+      "allow get_agent_profiles *",
+      "allow step_complete *",
+      "allow spawn_subagent_async *",
+      "allow wait_for_subagents *",
+      "allow check_subagent_status *",
+      "allow create_delegation_contract *",
+      "allow get_delegation_contract *",
+      "allow dispatch_delegation_contracts *",
+      "allow get_delegation_replay *",
+      "allow browser_open_page *",
+      "allow browser_navigate *",
+      "allow browser_click *",
+      "allow browser_type *",
+      "allow browser_wait_for *",
+      "allow browser_read_page *",
+      "allow browser_screenshot *",
+      "allow browser_close_page *",
+      "allow browser_list_failure_artifacts *",
+      "allow browser_get_failure_artifact *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow find *",
+      "allow grep *"
+    ]
+  },
+  "assigned_skills": [
+    "project-analysis",
+    "architecture-review",
+    "debugging",
+    "task-progress-tracking"
+  ],
+  "is_active": true
+}

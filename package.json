@@ -1,0 +1,84 @@
+{
+  "name": "nexus-orchestrator",
+  "version": "0.0.1",
+  "private": true,
+  "packageManager": "npm@11.6.4",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "packages/agent-local"
+  ],
+  "scripts": {
+    "architecture:assert-no-global-modules": "node scripts/assert-no-global-modules.mjs",
+    "lint": "npm run lint --workspaces",
+    "lint:api": "npm exec --workspace=apps/api -- eslint \"{src,apps,libs,test}/**/*.ts\"",
+    "lint:kanban": "npm exec --workspace=apps/kanban -- eslint \"{src,test}/**/*.ts\"",
+    "lint:summary": "pwsh -File ./scripts/lint-summary.ps1",
+    "lint:web": "npm run lint --workspace=apps/web",
+    "lint:packages": "eslint \"packages/**/*.{ts,tsx}\" --cache --cache-location node_modules/.cache/eslint/packages.cache",
+    "start:api": "npm run start:dev --workspace=apps/api",
+    "build": "turbo run build",
+    "build:api": "turbo run build --filter=api",
+    "build:kanban": "turbo run build --filter=@nexus/kanban",
+    "test:api": "npm run test --workspace=apps/api",
+    "test:integration:api": "npm run test:integration --workspace=apps/api",
+    "test:kanban": "npm run test --workspace=apps/kanban",
+    "test:unit:kanban": "npm run test:unit --workspace=apps/kanban",
+    "test:integration:kanban-core": "npm run test:integration --workspace=apps/kanban",
+    "test": "npm run test --workspaces",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "build:web": "turbo run build --filter=@nexus/web",
+    "test:unit:web": "npm run test:unit --workspace=apps/web",
+    "test:e2e:web": "npm run test:e2e --workspace=apps/web",
+    "test:e2e": "npm run test:e2e:harness --workspace=packages/e2e-tests",
+    "test:e2e:kanban:deterministic": "npm run test:e2e:kanban:deterministic --workspace=apps/api",
+    "validate:seed-data": "npm run validate:seed-data --workspace=apps/api",
+    "security:assert-no-public-jwt-fallback": "node scripts/assert-no-public-jwt-fallback.mjs",
+    "prepare": "husky",
+    "postinstall": "patch-package"
+  },
+  "lint-staged": {
+    "**/*.{ts,tsx}": [
+      "prettier --write",
+      "eslint --fix"
+    ],
+    "**/*.{js,mjs,cjs}": [
+      "prettier --write",
+      "eslint --fix"
+    ],
+    "**/*.{json,yaml,yml,md,css,html}": [
+      "prettier --write"
+    ]
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1069.0",
+    "@nestjs/cli": "^11.0.21",
+    "ajv": "^8.20.0",
+    "class-validator": "^0.15.1",
+    "dotenv": "^17.4.2",
+    "patch-package": "^8.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@swc-node/register": "^1.11.1",
+    "@swc/core": "^1.15.40",
+    "@vitest/coverage-v8": "^4.1.8",
+    "@vitest/expect": "^4.1.8",
+    "@vitest/runner": "^4.1.8",
+    "@vitest/spy": "^4.1.8",
+    "@vitest/utils": "^4.1.8",
+    "cross-env": "^10.1.0",
+    "eslint": "^10.4.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.6",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.7",
+    "magic-string": "^0.30.21",
+    "pathe": "^2.0.3",
+    "std-env": "^4.1.0",
+    "turbo": "^2.9.16",
+    "typescript": "^6.0.3",
+    "unplugin-swc": "^1.5.9",
+    "vitest": "^4.1.9"
+  }
+}

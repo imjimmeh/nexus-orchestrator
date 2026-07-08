@@ -1,0 +1,23 @@
+{
+  "name": "product_manager_ingestion",
+  "description": "Creates PRDs and proposes work items from design analysis and requirements documents.",
+  "tier_preference": "heavy",
+  "supports_vision": false,
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow read_document *",
+      "allow create_artifact *",
+      "allow kanban.propose_work_items *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow read_skill_manifest *"
+    ]
+  },
+  "assigned_skills": [
+    "prd-authoring",
+    "work-item-generation"
+  ],
+  "is_active": true
+}

@@ -1,0 +1,125 @@
+workflow_id: imported_repo_synthesis_and_hydration
+name: Imported Repo Synthesis and Hydration
+description: |
+  Reconciles imported-repository probe results into canonical work_items using deterministic reconciliation via kanban.reconcile_imported_repository_backlog.
+trigger:
+  type: manual
+concurrency:
+  max_runs: 1
+  scope: trigger.scopeId
+  on_conflict: cancel_running
+permissions:
+  tool_policy:
+    default: deny
+    rules:
+      - effect: allow
+        tool: get_todo_list
+      - effect: allow
+        tool: manage_todo_list
+jobs:
+  - id: hydrate_discovery_results
+    type: execution
+    tier: heavy
+    output_contract:
+      required:
+        - existing_work_item_count
+        - reconciliation_summary
+        - hydration_summary
+        - ready_for_cycle
+        - cycle_decision
+        - findings_ready_for_resolution
+      types:
+        existing_work_item_count: integer
+        reconciliation_summary: object
+        hydration_summary: object
+        ready_for_cycle: boolean
+        cycle_decision: string
+        findings_ready_for_resolution: boolean
+    inputs:
+      agent_profile: ceo-agent
+      scope_id: "{{ trigger.scopeId }}"
+      orchestrationMode: "{{ trigger.orchestrationMode }}"
+      humanDecisionPolicy: "{{ trigger.humanDecisionPolicy }}"
+    permissions:
+      tool_policy:
+        default: deny
+        rules:
+          - effect: allow
+            tool: kanban.project_state
+          - effect: allow
+            tool: kanban.reconcile_imported_repository_backlog
+          - effect: allow
+            tool: set_job_output
+          - effect: allow
+            tool: read
+          - effect: allow
+            tool: ls
+          - effect: allow
+            tool: get_todo_list
+          - effect: allow
+            tool: manage_todo_list
+          - effect: deny
+            tool: invoke_agent_workflow
+          - effect: deny
+            tool: invoke_workflow
+    steps:
+      - id: hydrate
+        prompt: |
+          Reconcile imported repository probe results into canonical work items.
+
+          Read and validate docs/project-context/probe-results/*.md as the primary reconciliation input. DB probe state is recovery/index metadata, not the source of truth. Block reconciliation with explicit output when required imported-repo probe artifacts are missing or invalid.
+
+          IMPORTANT: Never ask the user for trigger values or missing inputs. Do not use ask_user_questions or any interactive tool to obtain trigger goals, scope values, or workspace paths. All required context must be derived from trigger fields, kanban.project_state, or existing workspace artifacts.
+
+          1. Call kanban.project_state for work item context with project_id set to `{{ trigger.scopeId }}` and query_type set to `work_items`.
+          2. Count existing work items returned by project_state.workItems.length and store this as `existing_work_item_count`.
+             Do not count goals, persisted goals, backlog objectives, or readiness items as work items. If project_state.workItems is empty, existing_work_item_count must be 0 even when goals exist.
+          3. Build `goals_array` by normalizing available goal sources in priority order:
+             a. If `trigger.goals` is present and non-empty, normalize each goal to its title or description string.
+             b. Otherwise, if `kanban.project_state.goals` is present and non-empty, normalize each goal to its title or description string.
+             c. If neither source provides goals, set `goals_array` to [].
+             Never prompt the user when goals are missing; proceed with the best available source.
+          4. Preflight the probe artifact directory before reconciliation:
+             - Call ls for docs/project-context/probe-results.
+             - Require at least one `.md` artifact in docs/project-context/probe-results.
+             - If the directory is missing, empty, unreadable, or contains no `.md` artifacts, call set_job_output passing these fields directly. Example: `set_job_output({"existing_work_item_count": 0, "reconciliation_summary": {...}, "hydration_summary": {...}, "ready_for_cycle": false, "cycle_decision": "blocked"})`.
+             - Do not invoke kanban.reconcile_imported_repository_backlog when this preflight blocks.
+          5. Invoke kanban.reconcile_imported_repository_backlog with:
+             - project_id: {{ trigger.scopeId }}
+             - workspace_root: {{ trigger.basePath }}
+             - goals: goals_array
+             - probe_artifact_directory: docs/project-context/probe-results
+             - dry_run: false
+             - orchestration_mode: {{ trigger.orchestrationMode }}
+             - human_decision_policy: {{ trigger.humanDecisionPolicy }}
+           6. If the reconciliation result has status blocked, do not proceed. Set hydration_summary to ok false with status blocked and include the reason and diagnostics details. Set ready_for_cycle to JSON boolean false. Set cycle_decision to "blocked". Set reconciliation_summary from the result.
+            7. If all planned items are blocked/human-decision and no planned todo items remain (`reconciliation_summary.plan.counts.blocked > 0` and `reconciliation_summary.plan.counts.todo === 0`): set:
+                  - ready_for_cycle: false
+                  - cycle_decision: "blocked"
+                  - hydration_summary counts from publish counts when present
+             8. If at least one planned todo item exists (`reconciliation_summary.plan.counts.todo > 0`): set:
+                - ready_for_cycle: true
+                - cycle_decision: "repeat"
+           9. Otherwise, capture the reconciliation result fields:
+               - reconciliation_summary from plan.counts, plan.summary, publish.counts, and cycleDecision
+               - cycleDecision from the result's cycleDecision field
+               - readyForCycle from the result's readyForCycle boolean
+          10. Set `hydration_summary` from the reconciliation result:
+               - ok, status, reason when present
+               - created, updated, unchanged, skipped, errored counts from publish when present
+               - diagnostics when present
+               Do not fabricate success when reconciliation fails.
+          11. If no explicit branch above set `ready_for_cycle` to the value of the reconciliation result's readyForCycle field as a JSON boolean true or false, never a string.
+           12. If no explicit branch above sets `cycle_decision`, set it to the value of cycleDecision.decision from the reconciliation result (e.g. "repeat", "pause", "complete", "blocked").
+             13. Call set_job_output passing these fields directly. Example: `set_job_output({"existing_work_item_count": 5, "reconciliation_summary": {...}, "hydration_summary": {...}, "ready_for_cycle": true, "cycle_decision": "repeat", "findings_ready_for_resolution": true})`.
+             Include these fields:
+                 - existing_work_item_count
+                 - reconciliation_summary with ok, status, plan.counts, plan.summary, publish.counts when present, cycleDecision, and diagnostics when present
+                 - hydration_summary with ok, status when present, reason when present, counts from publish when present, and diagnostics when present
+                 - ready_for_cycle as JSON boolean true or false, never a string
+                 - cycle_decision from the resolved `cycle_decision` value set above
+                 - findings_ready_for_resolution: true when reconciliation status is findings_recorded and publish.counts.errors is 0, otherwise false
+
+          14. Do not use JSON-encoded string helpers like {{json ...}} for set_job_output.
+
+          Use actual values from tool responses in tool calls and set_job_output. Do not include angle-bracket placeholders or example placeholders in any tool call.

@@ -1,0 +1,28 @@
+{
+  "name": "spec-generator",
+  "tier_preference": "heavy",
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow write *",
+      "allow edit *",
+      "allow query_memory *",
+      "allow kanban.publish_specs *",
+      "allow validate_specs *",
+      "allow step_complete *",
+      "allow bash *",
+      "allow set_job_output *",
+      "allow search_skills *",
+      "allow ls *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow find *",
+      "allow grep *"
+    ]
+  },
+  "assigned_skills": [
+    "prd-to-issues"
+  ],
+  "is_active": true
+}

@@ -1,0 +1,139 @@
+import type { HarnessHookAsset, HarnessHookEvent } from "@nexus/core";
+import { resolveHookCommand } from "@nexus/harness-runtime";
+import type { StagedHookKey } from "./contribution-asset-staging.js";
+
+/** Neutral hook event → PI ExtensionAPI event name. */
+export const PI_HOOK_EVENT_BY_NEUTRAL: Record<
+  HarnessHookEvent,
+  | "session_start"
+  | "session_shutdown"
+  | "before_agent_start"
+  | "tool_call"
+  | "tool_result"
+> = {
+  session_start: "session_start",
+  session_end: "session_shutdown",
+  user_prompt_submit: "before_agent_start",
+  pre_tool_use: "tool_call",
+  post_tool_use: "tool_result",
+};
+
+const DEFAULT_HOOK_TIMEOUT_MS = 30_000;
+const MAX_HOOK_TIMEOUT_MS = 600_000;
+
+function clampTimeout(ms: number | undefined): number {
+  if (typeof ms !== "number" || Number.isNaN(ms))
+    return DEFAULT_HOOK_TIMEOUT_MS;
+  return Math.min(Math.max(Math.trunc(ms), 1), MAX_HOOK_TIMEOUT_MS);
+}
+
+/** Interpreter binary by script language. */
+const INTERPRETER_BY_LANGUAGE: Record<"bash" | "node" | "python", string> = {
+  bash: "sh",
+  node: "node",
+  python: "python3",
+};
+
+/**
+ * Generate the TypeScript source of a PI extension module (default-export
+ * factory) that runs each contributed hook asset on its mapped PI event.
+ * Returns null when there are no hooks (caller writes no file).
+ *
+ * The generated module is self-contained: it embeds small `__runShell` and
+ * `__runFile` helpers so it has no import dependency on this package at load
+ * time.
+ *
+ * - `command` hooks: embedded as JSON string literals via `__runShell`
+ *   (never spliced raw) — identical to EPIC-210.
+ * - `script` hooks: when `staged` contains a path for this hook index, the
+ *   staged file is invoked via `__runFile(interpreter, path, timeoutMs)` with
+ *   both the interpreter and path passed as separate `execFile` arguments
+ *   (injection-safe). The raw source is never embedded in the generated
+ *   extension. When no staged map is provided (backward compat), script hooks
+ *   fall back to the inline `resolveHookCommand` path.
+ *
+ * A `pre_tool_use` (tool_call) hook blocks when the exit code is non-zero.
+ * Command and script output is never logged.
+ */
+export function generateHookExtensionSource(
+  hooks: HarnessHookAsset[],
+  staged?: ReadonlyMap<StagedHookKey, string>,
+): string | null {
+  if (hooks.length === 0) return null;
+
+  let needsRunShell = false;
+  let needsRunFile = false;
+
+  const registrations = hooks
+    .map((hook, i) => {
+      const piEvent = PI_HOOK_EVENT_BY_NEUTRAL[hook.event];
+      const timeout = clampTimeout(hook.timeoutMs);
+      const blocks = piEvent === "tool_call";
+
+      let invocation: string;
+
+      if ("script" in hook && staged !== undefined) {
+        const key: StagedHookKey = `${hook.event}:${i.toString()}`;
+        const filePath = staged.get(key);
+        if (filePath !== undefined) {
+          const interpreter = INTERPRETER_BY_LANGUAGE[hook.script.language];
+          needsRunFile = true;
+          invocation = `await __runFile(${JSON.stringify(interpreter)}, ${JSON.stringify(filePath)}, ${timeout.toString()})`;
+        } else {
+          // Staged map present but no entry for this hook (shouldn't happen in
+          // normal usage, but guard gracefully by falling back to inline).
+          needsRunShell = true;
+          const command = JSON.stringify(resolveHookCommand(hook));
+          invocation = `await __runShell(${command}, ${timeout.toString()})`;
+        }
+      } else {
+        // command hook or no staged map: inline via __runShell (EPIC-210 path).
+        needsRunShell = true;
+        const command = JSON.stringify(resolveHookCommand(hook));
+        invocation = `await __runShell(${command}, ${timeout.toString()})`;
+      }
+
+      return `  pi.on(${JSON.stringify(piEvent)}, async () => {
+    const code = ${invocation};
+    ${blocks ? 'if (code !== 0) return { block: true, reason: "blocked by hook" };' : ""}
+  });`;
+    })
+    .join("\n");
+
+  const runShellHelper = needsRunShell
+    ? `
+const __shell = process.platform === "win32" ? "cmd" : "sh";
+const __shellFlag = process.platform === "win32" ? "/c" : "-c";
+
+function __runShell(command, timeoutMs) {
+  return new Promise((resolve) => {
+    execFile(__shell, [__shellFlag, command], { timeout: timeoutMs }, (err) => {
+      // Output is intentionally discarded — never logged (may carry secrets).
+      resolve(err && typeof err.code === "number" ? err.code : err ? 1 : 0);
+    });
+  });
+}
+`
+    : "";
+
+  const runFileHelper = needsRunFile
+    ? `
+function __runFile(interpreter, filePath, timeoutMs) {
+  return new Promise((resolve) => {
+    execFile(interpreter, [filePath], { timeout: timeoutMs }, (err) => {
+      // Output is intentionally discarded — never logged (may carry secrets).
+      resolve(err && typeof err.code === "number" ? err.code : err ? 1 : 0);
+    });
+  });
+}
+`
+    : "";
+
+  return `// AUTO-GENERATED by @nexus/harness-engine-pi — do not edit.
+import { execFile } from "node:child_process";
+${runShellHelper}${runFileHelper}
+export default function (pi) {
+${registrations}
+}
+`;
+}

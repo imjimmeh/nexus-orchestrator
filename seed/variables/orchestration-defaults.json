@@ -1,0 +1,46 @@
+{
+  "variables": [
+    { "key": "autonomy.dispatch", "value": "auto", "valueType": "string" },
+    {
+      "key": "autonomy.backlog_promotion",
+      "value": "auto",
+      "valueType": "string"
+    },
+    { "key": "autonomy.merge", "value": "ask", "valueType": "string" },
+    {
+      "key": "backlog.bootstrap_enabled",
+      "value": true,
+      "valueType": "boolean"
+    },
+    {
+      "key": "backlog.ideation_enabled",
+      "value": true,
+      "valueType": "boolean"
+    },
+    {
+      "key": "backlog.target_todo_depth",
+      "value": 3,
+      "valueType": "number"
+    },
+    {
+      "key": "gates.rediscovery_merge_threshold",
+      "value": 10,
+      "valueType": "number"
+    },
+    {
+      "key": "gates.roadmap_when_no_active_initiative",
+      "value": true,
+      "valueType": "boolean"
+    },
+    {
+      "key": "gates.ideation_starvation_cycles",
+      "value": 2,
+      "valueType": "number"
+    },
+    {
+      "key": "promotion.max_items_per_cycle",
+      "value": -1,
+      "valueType": "number"
+    }
+  ]
+}

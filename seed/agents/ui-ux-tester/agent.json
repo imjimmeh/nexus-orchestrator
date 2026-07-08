@@ -1,0 +1,35 @@
+{
+  "name": "ui-ux-tester",
+  "tier_preference": "heavy",
+  "model_name": null,
+  "provider_name": null,
+  "tool_policy": {
+    "default": "deny",
+    "rules": [
+      "allow read *",
+      "allow bash *",
+      "allow ls *",
+      "allow find *",
+      "allow grep *",
+      "allow query_memory *",
+      "allow remember *",
+      "allow get_todo_list *",
+      "allow manage_todo_list *",
+      "allow browser_open_page *",
+      "allow browser_navigate *",
+      "allow browser_click *",
+      "allow browser_type *",
+      "allow browser_wait_for *",
+      "allow browser_read_page *",
+      "allow browser_screenshot *",
+      "allow browser_close_page *",
+      "allow browser_list_failure_artifacts *",
+      "allow browser_get_failure_artifact *",
+      "allow search_skills *",
+      "allow set_job_output *",
+      "allow step_complete *"
+    ]
+  },
+  "assigned_skills": ["debugging", "task-progress-tracking"],
+  "is_active": true
+}
